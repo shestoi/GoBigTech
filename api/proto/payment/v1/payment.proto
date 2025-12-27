@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package payment.v1;
+
+option go_package = "github.com/shestoi/GoBigTech/services/payment/v1;paymentpb";
+
+service PaymentService {
+  rpc ProcessPayment(ProcessPaymentRequest) returns (ProcessPaymentResponse);
+}
+
+message ProcessPaymentRequest {
+  string order_id = 1;
+  string user_id = 2;
+  double amount = 3;
+  string method = 4;
+}
+
+message ProcessPaymentResponse {
+  bool success = 1;
+  string transaction_id = 2;
+}
