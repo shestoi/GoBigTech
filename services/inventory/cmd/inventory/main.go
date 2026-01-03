@@ -1,35 +1,29 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net"
 
+	grpcapi "github.com/shestoi/GoBigTech/services/inventory/internal/api/grpc"
+	"github.com/shestoi/GoBigTech/services/inventory/internal/repository/memory"
+	"github.com/shestoi/GoBigTech/services/inventory/internal/service"
 	inventorypb "github.com/shestoi/GoBigTech/services/inventory/v1"
 	"google.golang.org/grpc"
 )
 
-type server struct {
-	inventorypb.UnimplementedInventoryServiceServer
-}
-
-func (s *server) GetStock(ctx context.Context, req *inventorypb.GetStockRequest) (*inventorypb.GetStockResponse, error) {
-	log.Printf("GetStock called for product: %s", req.GetProductId())
-	return &inventorypb.GetStockResponse{
-		ProductId: req.GetProductId(),
-		Available: 42, // Всегда в наличии 42 штуки
-	}, nil
-}
-
-func (s *server) ReserveStock(ctx context.Context, req *inventorypb.ReserveStockRequest) (*inventorypb.ReserveStockResponse, error) {
-	log.Printf("ReserveStock called: product=%s, quantity=%d", req.GetProductId(), req.GetQuantity())
-	// Простая логика: резервируем если количество ≤ 42
-	return &inventorypb.ReserveStockResponse{
-		Success: req.GetQuantity() <= 42,
-	}, nil
-}
-
 func main() {
+	log.Println("Starting Inventory service...")
+
+	// Создаём in-memory репозиторий для хранения инвентаря
+	// В production будет заменён на реализацию с БД (MongoDB)
+	inventoryRepo := memory.NewMemoryRepository(nil)
+
+	// Создаём service слой с зависимостью от repository
+	inventoryService := service.NewInventoryService(inventoryRepo)
+
+	// Создаём gRPC handler, который использует service
+	grpcHandler := grpcapi.NewHandler(inventoryService)
+
 	// Слушаем на localhost (IPv4)
 	l, err := net.Listen("tcp4", "127.0.0.1:50051")
 	if err != nil {
@@ -39,8 +33,8 @@ func main() {
 	// Создаем gRPC сервер
 	grpcSrv := grpc.NewServer()
 
-	// Регистрируем наш сервер
-	inventorypb.RegisterInventoryServiceServer(grpcSrv, &server{})
+	// Регистрируем gRPC handler
+	inventorypb.RegisterInventoryServiceServer(grpcSrv, grpcHandler)
 
 	log.Println("Inventory gRPC server listening on 127.0.0.1:50051")
 
