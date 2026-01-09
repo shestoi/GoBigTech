@@ -20,6 +20,120 @@ go run ./cmd/order
 
 Сервис запускается на `127.0.0.1:8080` (HTTP).
 
+## База данных (PostgreSQL)
+
+Order Service использует PostgreSQL для хранения заказов.
+
+### Поднятие PostgreSQL через Docker Compose
+
+Из корня проекта (`GoBigTech/`):
+
+```bash
+# Запустить PostgreSQL контейнер
+docker compose up -d postgres
+
+# Проверить статус
+docker compose ps postgres
+
+# Просмотр логов
+docker compose logs postgres
+```
+
+PostgreSQL будет доступен на:
+- **Host**: `localhost:5432`
+- **Database**: `orders`
+- **User**: `order_user`
+- **Password**: `order_password`
+
+### Миграции (goose)
+
+Миграции находятся в папке `migrations/` и управляются через [goose](https://github.com/pressly/goose).
+
+#### Накатка миграций
+
+```bash
+# Используя Makefile (рекомендуется)
+make migrate-up
+
+# Или напрямую через goose
+go run github.com/pressly/goose/v3/cmd/goose@latest \
+  -dir migrations \
+  postgres "postgres://order_user:order_password@localhost:5432/orders?sslmode=disable" \
+  up
+```
+
+#### Проверка статуса миграций
+
+```bash
+# Через Makefile
+make migrate-status
+
+# Или напрямую
+go run github.com/pressly/goose/v3/cmd/goose@latest \
+  -dir migrations \
+  postgres "postgres://order_user:order_password@localhost:5432/orders?sslmode=disable" \
+  status
+```
+
+#### Откат миграций
+
+```bash
+# Откатить последнюю миграцию
+make migrate-down
+```
+
+#### Создание новой миграции
+
+```bash
+# Создать новую миграцию
+make migrate-create NAME=add_some_feature
+
+# Или напрямую
+go run github.com/pressly/goose/v3/cmd/goose@latest \
+  -dir migrations \
+  create add_some_feature sql
+```
+
+### Проверка таблиц в PostgreSQL
+
+После накатки миграций можно проверить, что таблицы созданы:
+
+```bash
+# Подключиться к PostgreSQL
+docker compose exec postgres psql -U order_user -d orders
+
+# В psql выполнить:
+\dt                    # Список таблиц
+\d orders              # Структура таблицы orders
+\d order_items         # Структура таблицы order_items
+\di                    # Список индексов
+\q                     # Выход
+```
+
+Или через одну команду:
+
+```bash
+# Проверить таблицы
+docker compose exec postgres psql -U order_user -d orders -c "\dt"
+
+# Проверить структуру таблицы orders
+docker compose exec postgres psql -U order_user -d orders -c "\d orders"
+```
+
+### Connection String (DSN)
+
+Для подключения к базе данных используйте следующий DSN:
+
+```
+postgres://order_user:order_password@localhost:5432/orders?sslmode=disable
+```
+
+Для подключения из контейнера (внутри Docker сети):
+
+```
+postgres://order_user:order_password@postgres:5432/orders?sslmode=disable
+```
+
 ## Тесты
 
 ### Запуск тестов

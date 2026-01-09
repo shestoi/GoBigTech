@@ -1,0 +1,53 @@
+name: gobigtech
+
+services:
+  # PostgreSQL для Order Service
+  postgres:
+    image: postgres:15-alpine
+    container_name: order-postgres
+    restart: unless-stopped
+    ports: #Возьми порт 15432 на хосте и направь его в порт 5432 контейнера
+      - "15432:5432" #внутри контейнера Postgres всё так же слушает 5432, на твоём маке Docker Desktop будет слушать 15432, локальный Postgres (если он есть) почти всегда слушает 5432, а не 15432
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: order_user
+      POSTGRES_PASSWORD: order_password
+    volumes:
+      - order_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U order_user -d orders"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gobigtech-network
+
+  # MongoDB для Inventory Service
+  mongo:
+    image: mongo:6
+    container_name: inventory-mongo
+    restart: unless-stopped
+    ports:
+      - "15417:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: inventory_user
+      MONGO_INITDB_ROOT_PASSWORD: inventory_password
+    volumes:
+      - inventory_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gobigtech-network
+
+volumes:
+  order_pg_data:
+    driver: local
+  inventory_mongo_data:
+    driver: local
+
+networks:
+  gobigtech-network:
+    driver: bridge
