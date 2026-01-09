@@ -9,7 +9,96 @@
 - **API слой** (`internal/api/grpc/`) - gRPC обработчики
 - **Service слой** (`internal/service/`) - бизнес-логика
 - **Repository слой** (`internal/repository/`) - работа с данными через интерфейсы
-- **In-memory реализация** (`internal/repository/memory/`) - для разработки
+- **MongoDB реализация** (`internal/repository/mongo/`) - production реализация
+- **In-memory реализация** (`internal/repository/memory/`) - для тестирования
+
+## База данных (MongoDB)
+
+Inventory Service использует MongoDB для хранения данных об инвентаре.
+
+### Поднятие MongoDB через Docker Compose
+
+Из корня проекта (`GoBigTech/`):
+
+```bash
+# Запустить MongoDB контейнер
+docker compose up -d mongo
+
+# Проверить статус
+docker compose ps mongo
+
+# Просмотр логов
+docker compose logs mongo
+```
+
+MongoDB будет доступна на:
+- **Host**: `127.0.0.1:15417` (порт на хосте)
+- **Container**: `27017` (внутри Docker сети)
+- **Username**: `inventory_user`
+- **Password**: `inventory_password`
+- **Database**: `inventory` (по умолчанию)
+
+### Переменные окружения
+
+Сервис использует следующие переменные окружения:
+
+- `INVENTORY_MONGO_URI` - URI для подключения к MongoDB
+  - Дефолт: `mongodb://inventory_user:inventory_password@127.0.0.1:15417/?authSource=admin`
+  - Для Docker сети: `mongodb://inventory_user:inventory_password@mongo:27017/?authSource=admin`
+
+- `INVENTORY_MONGO_DB` - имя базы данных
+  - Дефолт: `inventory`
+
+### Проверка подключения
+
+```bash
+# Подключиться к MongoDB через mongosh
+docker compose exec mongo mongosh -u inventory_user -p inventory_password --authenticationDatabase admin
+
+# Или через команду извне (если установлен mongosh)
+mongosh "mongodb://inventory_user:inventory_password@127.0.0.1:15417/?authSource=admin"
+```
+
+### Структура данных
+
+**Коллекция:** `inventory`
+
+**Документ:**
+```json
+{
+  "product_id": "product-123",
+  "stock": 42,
+  "updated_at": ISODate("2026-01-08T12:00:00Z")
+}
+```
+
+**Индексы:**
+- Уникальный индекс на `product_id` (создаётся автоматически при старте)
+
+### Проверка данных в MongoDB
+
+```bash
+# Подключиться к MongoDB
+docker compose exec mongo mongosh -u inventory_user -p inventory_password --authenticationDatabase admin
+
+# В mongosh выполнить:
+use inventory
+db.inventory.find()
+db.inventory.findOne({ product_id: "product-123" })
+db.inventory.getIndexes()
+```
+
+### Примеры команд
+
+```bash
+# Запуск сервиса с дефолтными настройками
+go run ./cmd/inventory
+
+# Запуск с кастомным URI
+INVENTORY_MONGO_URI="mongodb://inventory_user:inventory_password@127.0.0.1:15417/?authSource=admin" \
+INVENTORY_MONGO_DB="inventory" \
+go run ./cmd/inventory
+```
 
 ## Запуск
 
@@ -18,6 +107,8 @@ go run ./cmd/inventory
 ```
 
 Сервис запускается на `127.0.0.1:50051` (gRPC).
+
+**Важно:** Перед запуском убедитесь, что MongoDB поднята через `docker compose up -d mongo`.
 
 ## Тесты
 
