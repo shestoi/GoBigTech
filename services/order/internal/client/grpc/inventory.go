@@ -3,8 +3,8 @@ package grpcclient
 import (
 	"context"
 
-	"github.com/shestoi/GoBigTech/services/order/internal/service"
 	inventorypb "github.com/shestoi/GoBigTech/services/inventory/v1"
+	"github.com/shestoi/GoBigTech/services/order/internal/service"
 )
 
 // InventoryClientAdapter адаптирует gRPC клиент к интерфейсу service.InventoryClient
@@ -51,4 +51,3 @@ type ReservationError struct {
 func (e *ReservationError) Error() string {
 	return e.Message
 }
-

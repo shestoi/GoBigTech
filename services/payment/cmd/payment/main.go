@@ -2,44 +2,26 @@ package main
 
 import (
 	"log"
-	"net"
 
-	grpcapi "github.com/shestoi/GoBigTech/services/payment/internal/api/grpc"
-	"github.com/shestoi/GoBigTech/services/payment/internal/repository/memory"
-	"github.com/shestoi/GoBigTech/services/payment/internal/service"
-	paymentpb "github.com/shestoi/GoBigTech/services/payment/v1"
-	"google.golang.org/grpc"
+	"github.com/shestoi/GoBigTech/services/payment/internal/app"
+	"github.com/shestoi/GoBigTech/services/payment/internal/config"
 )
 
 func main() {
-	log.Println("Starting Payment service...")
-
-	// Создаём in-memory репозиторий для хранения транзакций
-	// В production будет заменён на реализацию с БД
-	paymentRepo := memory.NewMemoryRepository()
-
-	// Создаём service слой с зависимостью от repository
-	paymentService := service.NewPaymentService(paymentRepo)
-
-	// Создаём gRPC handler, который использует service
-	grpcHandler := grpcapi.NewHandler(paymentService)
-
-	// Слушаем на localhost (IPv4)
-	l, err := net.Listen("tcp4", "127.0.0.1:50052")
+	// Загружаем конфигурацию
+	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Создаем gRPC сервер
-	grpcSrv := grpc.NewServer()
+	// Создаём и настраиваем приложение через DI container
+	application, err := app.Build(cfg)
+	if err != nil {
+		log.Fatalf("Failed to build app: %v", err)
+	}
 
-	// Регистрируем gRPC handler
-	paymentpb.RegisterPaymentServiceServer(grpcSrv, grpcHandler)
-
-	log.Println("Payment gRPC server listening on 127.0.0.1:50052")
-
-	// Запускаем сервер
-	if err := grpcSrv.Serve(l); err != nil {
-		log.Fatalf("Failed to serve: %v", err)
+	// Запускаем сервис
+	if err := application.Run(); err != nil {
+		log.Fatalf("Service error: %v", err)
 	}
 }

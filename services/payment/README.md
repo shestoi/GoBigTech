@@ -11,6 +11,30 @@
 - **Repository слой** (`internal/repository/`) - работа с данными через интерфейсы
 - **In-memory реализация** (`internal/repository/memory/`) - для разработки
 
+## DI Container / App Builder
+
+Сервис использует явный builder паттерн для dependency injection через пакет `internal/app`.
+
+### Структура
+
+- **`internal/app/app.go`** - содержит структуру `App` и функцию `Build(cfg)` для создания всех зависимостей
+- **`cmd/payment/main.go`** - минимальный entry point, который вызывает `app.Build()` и `app.Run()`
+
+### Зависимости, собираемые в Build()
+
+Функция `Build(cfg)` создаёт и настраивает следующие зависимости:
+
+1. **Logger** - platform logger (zap) с конфигурацией из env
+2. **Repository** - in-memory реализация PaymentRepository
+3. **Service** - PaymentService с внедрённым repository
+4. **gRPC handler** - gRPC обработчики с service
+5. **gRPC server** - настроенный grpc.Server с reflection (если включено)
+6. **Health check** - gRPC health service с начальным статусом SERVING (нет внешних зависимостей)
+7. **Listener** - сетевой listener для gRPC сервера
+8. **Shutdown manager** - platform shutdown manager с зарегистрированными функциями
+
+Payment Service не имеет внешних зависимостей (БД), поэтому health check сразу устанавливается в SERVING.
+
 ## Запуск
 
 ```bash
@@ -18,6 +42,36 @@ go run ./cmd/payment
 ```
 
 Сервис запускается на `127.0.0.1:50052` (gRPC).
+
+## Health Check
+
+Сервис использует стандартный gRPC health service (`grpc.health.v1.Health`) для проверки готовности.
+
+### Проверка health через grpcurl
+
+```bash
+# Проверка health status
+grpcurl -plaintext 127.0.0.1:50052 grpc.health.v1.Health/Check
+
+# Ожидаемый ответ:
+# {
+#   "status": "SERVING"
+# }
+```
+
+### Readiness и Liveness
+
+- **Liveness**: Процесс жив (всегда SERVING после старта сервера)
+- **Readiness**: Готов обслуживать запросы
+  - Начальный статус: `SERVING` (нет внешних зависимостей)
+  - При graceful shutdown: `NOT_SERVING` → остановка сервера
+
+### Graceful Shutdown
+
+При получении SIGINT/SIGTERM:
+1. Readiness переключается в `NOT_SERVING`
+2. gRPC сервер останавливается gracefully (GracefulStop)
+3. Сервис завершает работу
 
 ## Тесты
 
@@ -85,4 +139,5 @@ go run github.com/vektra/mockery/v2@latest \
 ```
 
 Мок будет создан в `internal/repository/mocks/PaymentRepository.go`.
+
 

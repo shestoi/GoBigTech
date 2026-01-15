@@ -31,3 +31,4 @@ type PaymentRepository interface {
 // ErrNotFound возвращается, когда транзакция не найдена в хранилище
 var ErrNotFound = errors.New("transaction not found")
 
+
