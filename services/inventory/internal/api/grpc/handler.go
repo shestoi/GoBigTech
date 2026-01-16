@@ -52,3 +52,4 @@ func (h *Handler) ReserveStock(ctx context.Context, req *inventorypb.ReserveStoc
 	}, nil
 }
 
+

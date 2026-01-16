@@ -12,6 +12,32 @@
 - **Client слой** (`internal/client/grpc/`) - адаптеры для вызова других сервисов (Inventory, Payment)
 - **In-memory реализация** (`internal/repository/memory/`) - для разработки
 
+## DI Container / App Builder
+
+Сервис использует явный builder паттерн для dependency injection через пакет `internal/app`.
+
+### Структура
+
+- **`internal/app/app.go`** - содержит структуру `App` и функцию `Build(cfg)` для создания всех зависимостей
+- **`cmd/order/main.go`** - минимальный entry point, который вызывает `app.Build()` и `app.Run()`
+
+### Зависимости, собираемые в Build()
+
+Функция `Build(cfg)` создаёт и настраивает следующие зависимости:
+
+1. **Logger** - platform logger (zap) с конфигурацией из env
+2. **gRPC клиенты** - соединения с Inventory и Payment сервисами
+3. **PostgreSQL pool** - connection pool для работы с БД
+4. **Readiness функция** - проверка доступности PostgreSQL для health check
+5. **Repository** - PostgreSQL реализация OrderRepository
+6. **Service** - OrderService с внедрёнными зависимостями
+7. **HTTP handler** - HTTP обработчики с logger
+8. **HTTP router** - роутер с readiness функцией
+9. **HTTP server** - настроенный http.Server
+10. **Shutdown manager** - platform shutdown manager с зарегистрированными функциями
+
+Все зависимости создаются в правильном порядке и с обработкой ошибок. При ошибке создания любой зависимости, уже созданные ресурсы корректно закрываются.
+
 ## Запуск
 
 ```bash
@@ -19,6 +45,51 @@ go run ./cmd/order
 ```
 
 Сервис запускается на `127.0.0.1:8080` (HTTP).
+
+## Health Check
+
+Сервис предоставляет HTTP health check endpoint для проверки готовности.
+
+### Проверка health через curl
+
+```bash
+# Проверка health status
+curl -i http://127.0.0.1:8080/health
+
+# Ожидаемый ответ при готовности (200 OK):
+# HTTP/1.1 200 OK
+# Content-Type: application/json
+# 
+# {"status":"ok"}
+
+# Ожидаемый ответ при неготовности (503 Service Unavailable):
+# HTTP/1.1 503 Service Unavailable
+# Content-Type: application/json
+# 
+# {"status":"not ready"}
+```
+
+### Readiness и Liveness
+
+- **Liveness**: Процесс жив (всегда 200 OK после старта сервера)
+- **Readiness**: Готов обслуживать запросы
+  - Проверяется через ping PostgreSQL при каждом запросе к `/health`
+  - Если PostgreSQL недоступен: возвращается 503 Service Unavailable
+  - Если PostgreSQL доступен: возвращается 200 OK
+
+### Поведение при отсутствии PostgreSQL
+
+Если PostgreSQL не поднята или недоступна:
+- Сервис не стартует и логирует ошибку
+- Health check недоступен (сервер не запущен)
+
+### Graceful Shutdown
+
+При получении SIGINT/SIGTERM:
+1. Readiness проверка начинает возвращать false (PostgreSQL ping может не пройти)
+2. HTTP сервер останавливается gracefully (Shutdown с таймаутом)
+3. Соединение с PostgreSQL закрывается (pool.Close)
+4. Сервис завершает работу
 
 ## База данных (PostgreSQL)
 
@@ -147,6 +218,34 @@ go test ./...
 ```bash
 go test ./... -v
 ```
+
+### Интеграционные тесты
+
+Интеграционные тесты используют [testcontainers-go](https://github.com/testcontainers/testcontainers-go) для поднятия PostgreSQL в Docker контейнере.
+
+**Требования:**
+- Docker должен быть запущен
+- Тесты помечены build tag `integration` и не запускаются по умолчанию
+
+**Запуск интеграционных тестов:**
+
+```bash
+# Запустить интеграционные тесты для PostgreSQL repository
+go test -tags=integration ./internal/repository/postgres -v
+
+# Запустить все интеграционные тесты
+go test -tags=integration ./... -v
+
+# С увеличенным таймаутом (если нужно)
+go test -tags=integration ./internal/repository/postgres -v -timeout 5m
+```
+
+**Что делают интеграционные тесты:**
+- Поднимают PostgreSQL контейнер (postgres:15-alpine) через testcontainers
+- Автоматически накатывают миграции через goose
+- Тестируют Save и GetByID методы repository
+- Проверяют обработку ErrNotFound
+- Автоматически удаляют контейнер после завершения теста
 
 ## Coverage
 

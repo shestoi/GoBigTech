@@ -3,8 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"github.com/shestoi/GoBigTech/services/order/internal/repository"
 	"github.com/shestoi/GoBigTech/services/order/internal/service"
@@ -14,12 +15,14 @@ import (
 // Зависит от service слоя, но не знает о деталях реализации (gRPC, БД и т.д.)
 type Handler struct {
 	orderService *service.OrderService
+	logger       *zap.Logger
 }
 
 // NewHandler создаёт новый HTTP handler
-func NewHandler(orderService *service.OrderService) *Handler {
+func NewHandler(orderService *service.OrderService, logger *zap.Logger) *Handler {
 	return &Handler{
 		orderService: orderService,
+		logger:       logger,
 	}
 }
 
@@ -45,21 +48,23 @@ type OrderResponse struct {
 
 // PostOrders обрабатывает POST /orders - создание нового заказа
 func (h *Handler) PostOrders(w http.ResponseWriter, r *http.Request) {
+	const op = "Handler.PostOrders"
 	ctx := r.Context()
 
-	log.Println("Received POST /orders request")
+	logger := h.logger.With(zap.String("op", op))
+	logger.Info("Received request", zap.String("method", r.Method), zap.String("path", r.URL.Path))
 
 	// Декодируем JSON тело запроса
 	var reqBody OrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		log.Printf("JSON decode error: %v", err)
+		logger.Warn("JSON decode error", zap.Error(err))
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
 
 	// Валидация входных данных
 	if reqBody.UserID == nil || reqBody.Items == nil || len(*reqBody.Items) == 0 {
-		log.Printf("Validation failed: missing required fields")
+		logger.Warn("Validation failed: missing required fields")
 		http.Error(w, "Invalid payload: user_id and items are required", http.StatusBadRequest)
 		return
 	}
@@ -67,12 +72,12 @@ func (h *Handler) PostOrders(w http.ResponseWriter, r *http.Request) {
 	// Валидация всех items: product_id не пустой, quantity > 0
 	for i, item := range *reqBody.Items {
 		if item.ProductID == nil || *item.ProductID == "" {
-			log.Printf("Validation failed: product_id is required in items[%d]", i)
+			logger.Warn("Validation failed: product_id is required", zap.Int("item_index", i))
 			http.Error(w, fmt.Sprintf("Invalid payload: product_id is required in items[%d]", i), http.StatusBadRequest)
 			return
 		}
 		if item.Quantity == nil || *item.Quantity <= 0 {
-			log.Printf("Validation failed: quantity must be > 0 in items[%d]", i)
+			logger.Warn("Validation failed: quantity must be > 0", zap.Int("item_index", i))
 			http.Error(w, fmt.Sprintf("Invalid payload: quantity must be > 0 in items[%d]", i), http.StatusBadRequest)
 			return
 		}
@@ -97,7 +102,7 @@ func (h *Handler) PostOrders(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		log.Printf("Order creation error: %v", err)
+		logger.Error("Order creation error", zap.Error(err))
 		// Определяем HTTP статус на основе типа ошибки
 		http.Error(w, fmt.Sprintf("Failed to create order: %v", err), http.StatusServiceUnavailable)
 		return
@@ -126,18 +131,21 @@ func (h *Handler) PostOrders(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("Failed to encode response: %v", err)
+		logger.Error("Failed to encode response", zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Order created successfully: %s", result.OrderID)
+	logger.Info("Order created successfully", zap.String("order_id", result.OrderID))
 }
 
 // GetOrdersId обрабатывает GET /orders/{id} - получение заказа по ID
 func (h *Handler) GetOrdersId(w http.ResponseWriter, r *http.Request, id string) {
+	const op = "Handler.GetOrdersId"
 	ctx := r.Context()
-	log.Printf("Received GET /orders/%s request", id)
+
+	logger := h.logger.With(zap.String("op", op), zap.String("order_id", id))
+	logger.Info("Received request", zap.String("method", r.Method))
 
 	// Вызываем service слой для получения заказа
 	// Бизнес-логика теперь в service, а не в обработчике
@@ -146,7 +154,7 @@ func (h *Handler) GetOrdersId(w http.ResponseWriter, r *http.Request, id string)
 	})
 
 	if err != nil {
-		log.Printf("Get order error: %v", err)
+		logger.Error("Get order error", zap.Error(err))
 		http.Error(w, fmt.Sprintf("Failed to get order: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -173,14 +181,8 @@ func (h *Handler) GetOrdersId(w http.ResponseWriter, r *http.Request, id string)
 	w.Header().Set("Content-Type", "application/json")
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Printf("Failed to encode response: %v", err)
+		logger.Error("Failed to encode response", zap.Error(err))
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-}
-
-// Health обрабатывает GET /health - проверка здоровья сервиса
-func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
