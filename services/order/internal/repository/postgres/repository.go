@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shestoi/GoBigTech/services/order/internal/repository"
 )
@@ -137,6 +138,184 @@ func (r *Repository) GetByID(ctx context.Context, id string) (repository.Order, 
 	return order, nil
 }
 
+// HandleAssemblyCompletedTx обрабатывает событие завершения сборки заказа в транзакции
+// Возвращает (inserted, rowsAffected, error):
+//   - inserted=true если событие впервые обработано (вставлено в inbox)
+//   - inserted=false если событие уже было обработано (duplicate event_id)
+//   - rowsAffected - количество обновлённых строк в orders (0 или 1)
+func (r *Repository) HandleAssemblyCompletedTx(ctx context.Context, eventID, eventType string, occurredAt time.Time, orderID string) (inserted bool, rowsAffected int64, err error) {
+	// Начинаем транзакцию
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Пытаемся вставить событие в inbox
+	_, err = tx.Exec(ctx,
+		`INSERT INTO order_inbox_events (event_id, event_type, occurred_at, order_id)
+		 VALUES ($1, $2, $3, $4)`,
+		eventID, eventType, occurredAt, orderID)
+
+	if err != nil {
+		// Проверяем, это duplicate key error?
+		var pgErr *pgconn.PgError                            //pgErr для проверки ошибки
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			// Событие уже обработано
+			return false, 0, nil
+		}
+		// Другая ошибка
+		return false, 0, err
+	}
+
+	// Событие впервые обработано
+	inserted = true
+
+	// Обновляем статус заказа: paid -> assembled
+	result, err := tx.Exec(ctx,
+		`UPDATE orders SET status = 'assembled' 
+		 WHERE id = $1 AND status = 'paid'`,
+		orderID)
+	if err != nil {
+		return false, 0, err
+	}
+
+	rowsAffected = result.RowsAffected() //получаем количество обновлённых строк
+
+	// Коммитим транзакцию
+	if err = tx.Commit(ctx); err != nil {
+		return false, 0, err
+	}
+
+	return inserted, rowsAffected, nil
+}
+
+// SaveWithOutbox сохраняет заказ и добавляет событие в outbox в одной транзакции
+func (r *Repository) SaveWithOutbox(ctx context.Context, order repository.Order, eventID, eventType string, occurredAt time.Time, payload []byte, topic string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Сохраняем order
+	var createdAt time.Time
+	if order.CreatedAt > 0 {
+		createdAt = time.Unix(order.CreatedAt, 0)
+		_, err = tx.Exec(ctx,
+			`INSERT INTO orders (id, user_id, status, created_at) 
+			 VALUES ($1, $2, $3, $4) 
+			 ON CONFLICT (id) DO UPDATE SET 
+			   user_id = EXCLUDED.user_id,
+			   status = EXCLUDED.status,
+			   created_at = EXCLUDED.created_at`,
+			order.ID, order.UserID, order.Status, createdAt)
+	} else {
+		_, err = tx.Exec(ctx,
+			`INSERT INTO orders (id, user_id, status) 
+			 VALUES ($1, $2, $3) 
+			 ON CONFLICT (id) DO UPDATE SET 
+			   user_id = EXCLUDED.user_id,
+			   status = EXCLUDED.status`,
+			order.ID, order.UserID, order.Status)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Удаляем старые items
+	_, err = tx.Exec(ctx, `DELETE FROM order_items WHERE order_id = $1`, order.ID)
+	if err != nil {
+		return err
+	}
+
+	// Сохраняем order_items
+	for _, item := range order.Items {
+		_, err = tx.Exec(ctx,
+			`INSERT INTO order_items (order_id, product_id, quantity) 
+			 VALUES ($1, $2, $3)`,
+			order.ID, item.ProductID, item.Quantity)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Добавляем событие в outbox
+	_, err = tx.Exec(ctx,
+		`INSERT INTO order_outbox_events (event_id, event_type, occurred_at, aggregate_id, payload, topic, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
+		eventID, eventType, occurredAt, order.ID, payload, topic)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// GetPendingOutboxEvents получает pending события из outbox для отправки
+func (r *Repository) GetPendingOutboxEvents(ctx context.Context, limit int) ([]repository.OutboxEvent, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT event_id, event_type, occurred_at, aggregate_id, payload, topic, status, attempts, last_error, created_at, sent_at
+		 FROM order_outbox_events
+		 WHERE status = 'pending'
+		 ORDER BY created_at ASC
+		 LIMIT $1`,
+		limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := make([]repository.OutboxEvent, 0)
+	for rows.Next() {
+		var event repository.OutboxEvent
+		var sentAt *time.Time
+		err := rows.Scan(
+			&event.EventID, &event.EventType, &event.OccurredAt, &event.AggregateID,
+			&event.Payload, &event.Topic, &event.Status, &event.Attempts,
+			&event.LastError, &event.CreatedAt, &sentAt)
+		if err != nil {
+			return nil, err
+		}
+		if sentAt != nil {
+			event.SentAt = *sentAt
+		}
+		events = append(events, event)
+	}
+
+	return events, rows.Err()
+}
+
+// MarkOutboxEventSent отмечает событие как отправленное
+func (r *Repository) MarkOutboxEventSent(ctx context.Context, eventID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE order_outbox_events 
+		 SET status = 'sent', sent_at = NOW()
+		 WHERE event_id = $1`,
+		eventID)
+	return err
+}
+
+// MarkOutboxEventFailed отмечает событие как failed и увеличивает attempts
+func (r *Repository) MarkOutboxEventFailed(ctx context.Context, eventID string, errMsg string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE order_outbox_events 
+		 SET status = 'failed', attempts = attempts + 1, last_error = $2
+		 WHERE event_id = $1`,
+		eventID, errMsg)
+	return err
+}
+
+// ResetOutboxEventPending сбрасывает статус события на pending для retry
+func (r *Repository) ResetOutboxEventPending(ctx context.Context, eventID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE order_outbox_events 
+		 SET status = 'pending'
+		 WHERE event_id = $1`,
+		eventID)
+	return err
+}
+
 //package postgres
 //
 //import (
@@ -236,4 +415,3 @@ func (r *Repository) GetByID(ctx context.Context, id string) (repository.Order, 
 //
 //	return order, nil
 //}
-

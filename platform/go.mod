@@ -3,6 +3,7 @@ module github.com/shestoi/GoBigTech/platform
 go 1.24.2
 
 require (
+	github.com/caarlos0/env/v10 v10.0.0
 	go.uber.org/zap v1.27.0
 	google.golang.org/grpc v1.77.0
 )

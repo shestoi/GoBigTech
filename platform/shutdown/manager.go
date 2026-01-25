@@ -68,10 +68,10 @@ func (m *Manager) Wait() {
 		ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
 		start := time.Now()
 
-		err := fn.fn(ctx)
-		cancel()
+		err := fn.fn(ctx) //выполняем shutdown функцию
+		cancel()          //отменяем контекст
 
-		duration := time.Since(start)
+		duration := time.Since(start) //время выполнения
 		if err != nil {
 			m.logger.Error("Shutdown function failed",
 				zap.String("name", fn.name),
@@ -147,4 +147,3 @@ func SetHealthNotServing(health interface {
 		return nil
 	}
 }
-

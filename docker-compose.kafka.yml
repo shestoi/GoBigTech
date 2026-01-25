@@ -1,0 +1,54 @@
+
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: gobigtech-kafka
+    hostname: kafka
+    ports:
+      - "19092:19092" # HOST listener — для приложений, запускаемых с хоста (GoLand, go run)
+    volumes:
+      # Персистентное хранилище для данных Kafka (логи, метаданные)
+      # При удалении контейнера данные сохраняются, при docker compose down -v — удаляются
+      - kafka-data:/var/lib/kafka/data
+    environment:
+      # --- KRaft / роли ---
+      # KRaft режим: Kafka без ZooKeeper, использует встроенный контроллер
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # --- listeners ---
+      # Три listener'а для разных сценариев подключения:
+      #   CONTROLLER — служебный, для внутренней связи контроллера
+      #   DOCKER (kafka:9092) — для микросервисов внутри docker-compose сети
+      #   HOST (localhost:19092) — для приложений, запускаемых с хоста (GoLand, go run)
+      KAFKA_LISTENERS: CONTROLLER://:9093,DOCKER://:9092,HOST://:19092
+      # Что Kafka будет "рекламировать" клиентам как свои адреса
+      KAFKA_ADVERTISED_LISTENERS: DOCKER://kafka:9092,HOST://localhost:19092
+      # Для каждого listener'а указываем протокол (PLAINTEXT для dev окружения)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,DOCKER:PLAINTEXT,HOST:PLAINTEXT
+
+      # Какой listener используется контроллером
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Кворум контроллеров (один брокер → одна нода)
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+
+      # --- прочие dev-настройки для single-node ---
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - gobigtech-network
+
+volumes:
+  # Именованный volume для персистентного хранения данных Kafka
+  kafka-data:
+
+
+networks:
+  gobigtech-network:
+    driver: bridge
+    external: true
+

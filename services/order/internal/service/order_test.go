@@ -5,27 +5,29 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+
 	"github.com/shestoi/GoBigTech/services/order/internal/repository"
 	repoMocks "github.com/shestoi/GoBigTech/services/order/internal/repository/mocks"
 	"github.com/shestoi/GoBigTech/services/order/internal/service/mocks"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 )
 
 func TestOrderService_CreateOrder(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name                string
-		input               CreateOrderInput
-		inventoryErrors     map[string]error // productID -> error
+		name                 string
+		input                CreateOrderInput
+		inventoryErrors      map[string]error // productID -> error
 		paymentTransactionID string
-		paymentError        error
-		repoError           error
-		expectedError       bool
-		errorContains       string
-		validateOrder       func(t *testing.T, order repository.Order)
-		expectPaymentCalled bool
+		paymentError         error
+		repoError            error
+		expectedError        bool
+		errorContains        string
+		validateOrder        func(t *testing.T, order repository.Order)
+		expectPaymentCalled  bool
 		expectRepoSaveCalled bool
 	}{
 		{
@@ -39,7 +41,7 @@ func TestOrderService_CreateOrder(t *testing.T) {
 					},
 				},
 			},
-			inventoryErrors:       map[string]error{"product-456": nil},
+			inventoryErrors:      map[string]error{"product-456": nil},
 			paymentTransactionID: "txn-789",
 			paymentError:         nil,
 			repoError:            nil,
@@ -95,7 +97,7 @@ func TestOrderService_CreateOrder(t *testing.T) {
 				UserID: "user-123",
 				Items:  []repository.OrderItem{},
 			},
-			inventoryErrors:       nil,
+			inventoryErrors:      nil,
 			paymentTransactionID: "",
 			paymentError:         nil,
 			repoError:            nil,
@@ -115,7 +117,7 @@ func TestOrderService_CreateOrder(t *testing.T) {
 					},
 				},
 			},
-			inventoryErrors:       map[string]error{"product-456": errors.New("insufficient stock")},
+			inventoryErrors:      map[string]error{"product-456": errors.New("insufficient stock")},
 			paymentTransactionID: "",
 			paymentError:         nil,
 			repoError:            nil,
@@ -162,7 +164,7 @@ func TestOrderService_CreateOrder(t *testing.T) {
 					},
 				},
 			},
-			inventoryErrors:       map[string]error{"product-456": nil},
+			inventoryErrors:      map[string]error{"product-456": nil},
 			paymentTransactionID: "",
 			paymentError:         errors.New("payment declined"),
 			repoError:            nil,
@@ -182,7 +184,7 @@ func TestOrderService_CreateOrder(t *testing.T) {
 					},
 				},
 			},
-			inventoryErrors:       map[string]error{"product-456": nil},
+			inventoryErrors:      map[string]error{"product-456": nil},
 			paymentTransactionID: "txn-789",
 			paymentError:         nil,
 			repoError:            errors.New("database error"),
@@ -200,7 +202,8 @@ func TestOrderService_CreateOrder(t *testing.T) {
 			mockPayment := mocks.NewPaymentClient(t)
 			mockRepo := repoMocks.NewOrderRepository(t)
 
-			service := NewOrderService(mockInventory, mockPayment, mockRepo)
+			logger := zap.NewNop()
+			service := NewOrderService(logger, mockInventory, mockPayment, mockRepo, "order.payment.completed")
 
 			// Настройка моков для inventory (для каждого item)
 			if tt.inventoryErrors != nil {
@@ -212,7 +215,31 @@ func TestOrderService_CreateOrder(t *testing.T) {
 			}
 
 			if tt.expectPaymentCalled {
-				mockPayment.On("ProcessPayment", ctx, "order-123", tt.input.UserID, 100.0, "card").
+				// orderID теперь генерируется динамически, используем MatchedBy для проверки
+				// сумма вычисляется из количества товаров: quantity * pricePerItemCents / 100.0
+				const pricePerItemCents = 100 * 100 // 100 условных единиц, каждая = 100 копеек
+
+				expectedTotalAmountCents := int64(0) // ожидаемая сумма в копейках
+				for _, item := range tt.input.Items {
+					expectedTotalAmountCents += int64(item.Quantity) * pricePerItemCents
+				}
+				expectedAmount := float64(expectedTotalAmountCents) / 100.0 // конвертируем в float64 для ProcessPayment
+
+				mockPayment.On("ProcessPayment", ctx,
+					mock.MatchedBy(func(orderID string) bool {
+						return len(orderID) > 0 && orderID[:6] == "order-" // проверяем, что ID заказа начинается с "order-"
+					}),
+					tt.input.UserID,
+					mock.MatchedBy(func(amount float64) bool {
+						// Проверяем сумму - должна совпадать с ожидаемой
+						// Используем точное сравнение, так как расчет целочисленный
+						if amount != expectedAmount {
+							t.Logf("Amount mismatch: expected %.2f, got %.2f", expectedAmount, amount)
+							return false
+						}
+						return true
+					}),
+					"card").
 					Return(tt.paymentTransactionID, tt.paymentError).Once()
 			} else {
 				mockPayment.AssertNotCalled(t, "ProcessPayment")
@@ -274,12 +301,12 @@ func TestOrderService_GetOrder(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name          string
-		input         GetOrderInput
-		repoOrder     repository.Order
-		repoError     error
-		expectedError bool
-		errorContains string
+		name           string
+		input          GetOrderInput
+		repoOrder      repository.Order
+		repoError      error
+		expectedError  bool
+		errorContains  string
 		validateOutput func(t *testing.T, output *GetOrderOutput)
 	}{
 		{
@@ -381,7 +408,8 @@ func TestOrderService_GetOrder(t *testing.T) {
 			mockPayment := mocks.NewPaymentClient(t)
 			mockRepo := repoMocks.NewOrderRepository(t)
 
-			service := NewOrderService(mockInventory, mockPayment, mockRepo)
+			logger := zap.NewNop()
+			service := NewOrderService(logger, mockInventory, mockPayment, mockRepo, "order.payment.completed")
 
 			mockRepo.On("GetByID", ctx, tt.input.OrderID).
 				Return(tt.repoOrder, tt.repoError).Once()

@@ -39,12 +39,13 @@ func TestInventoryService_GetStock(t *testing.T) {
 			expectedError:  false,
 		},
 		{
-			name:           "ErrNotFound returns default 42",
+			name:           "ErrNotFound returns 0 with error",
 			productID:      "product-3",
 			repoReturn:     0,
 			repoError:      repository.ErrNotFound,
-			expectedResult: 42,
-			expectedError:  false,
+			expectedResult: 0,
+			expectedError:  true,
+			errorContains:  "product not found",
 		},
 		{
 			name:           "arbitrary error returns error",
@@ -70,7 +71,7 @@ func TestInventoryService_GetStock(t *testing.T) {
 
 			// Assert
 			if tt.expectedError {
-				require.Error(t, err)
+				require.Error(t, err, "Expected error but got nil. Result: %d", result)
 				if tt.errorContains != "" {
 					require.Contains(t, err.Error(), tt.errorContains)
 				}
@@ -155,5 +156,3 @@ func TestInventoryService_ReserveStock(t *testing.T) {
 		})
 	}
 }
-
-
