@@ -18,6 +18,7 @@ import (
 	httpapi "github.com/shestoi/GoBigTech/services/order/internal/api/http"
 	grpcclient "github.com/shestoi/GoBigTech/services/order/internal/client/grpc"
 	"github.com/shestoi/GoBigTech/services/order/internal/config"
+	eventkafka "github.com/shestoi/GoBigTech/services/order/internal/event/kafka"
 	"github.com/shestoi/GoBigTech/services/order/internal/repository/postgres"
 	"github.com/shestoi/GoBigTech/services/order/internal/service"
 	paymentpb "github.com/shestoi/GoBigTech/services/payment/v1"
@@ -25,11 +26,13 @@ import (
 
 // App содержит все зависимости для запуска и корректного shutdown Order Service
 type App struct {
-	logger      *zap.Logger
-	httpServer  *http.Server
-	shutdownMgr *platformshutdown.Manager
-	readiness   func() bool
-	wg          sync.WaitGroup
+	logger           *zap.Logger
+	httpServer       *http.Server
+	assemblyConsumer *eventkafka.OrderAssemblyCompletedConsumer
+	outboxDispatcher *eventkafka.OutboxDispatcher
+	shutdownMgr      *platformshutdown.Manager
+	readiness        func() bool
+	wg               sync.WaitGroup
 }
 
 // Build создаёт и настраивает все зависимости Order Service
@@ -108,8 +111,49 @@ func Build(cfg config.Config) (*App, error) {
 	// Создаём PostgreSQL репозиторий
 	orderRepo := postgres.NewRepository(pool)
 
-	// Создаем service слой с зависимостями
-	orderService := service.NewOrderService(inventoryClientAdapter, paymentClientAdapter, orderRepo)
+	// Создаем service слой с зависимостями (без publisher, используем outbox)
+	orderService := service.NewOrderService(logger, inventoryClientAdapter, paymentClientAdapter, orderRepo, cfg.PaymentCompletedTopic)
+
+	// Создаём outbox dispatcher для публикации событий из outbox таблицы
+	var outboxDispatcher *eventkafka.OutboxDispatcher
+	if len(cfg.Brokers) > 0 && cfg.PaymentCompletedTopic != "" {
+		logger.Info("Initializing outbox dispatcher",
+			zap.Strings("brokers", cfg.Brokers),
+			zap.String("topic", cfg.PaymentCompletedTopic),
+		)
+		outboxDispatcher = eventkafka.NewOutboxDispatcher(
+			logger,
+			orderRepo,
+			cfg.Brokers,
+			10,            // batch size
+			2*time.Second, // interval
+			3,             // max retries
+			1*time.Second, // backoff
+		)
+	} else {
+		logger.Warn("Kafka brokers or topic not configured, outbox dispatcher will not be started")
+	}
+
+	// Создаём Kafka consumer для событий завершения сборки заказа
+	var assemblyConsumer *eventkafka.OrderAssemblyCompletedConsumer
+	if len(cfg.Brokers) > 0 && cfg.AssemblyCompletedTopic != "" {
+		logger.Info("Initializing Kafka assembly completed consumer",
+			zap.Strings("brokers", cfg.Brokers),
+			zap.String("topic", cfg.AssemblyCompletedTopic),
+			zap.String("group_id", cfg.OrderConsumerGroupID),
+		)
+		assemblyConsumer = eventkafka.NewOrderAssemblyCompletedConsumer(
+			logger,
+			cfg.Brokers,
+			cfg.OrderConsumerGroupID,
+			cfg.AssemblyCompletedTopic,
+			orderService,
+			cfg.AssemblyConsumerRetryMaxAttempts,
+			cfg.AssemblyConsumerRetryBackoffBase,
+		)
+	} else {
+		logger.Warn("Kafka brokers or assembly topic not configured, assembly events will not be consumed")
+	}
 
 	// Создаем HTTP handler
 	handler := httpapi.NewHandler(orderService, logger)
@@ -130,6 +174,16 @@ func Build(cfg config.Config) (*App, error) {
 	shutdownMgr := platformshutdown.New(cfg.ShutdownTimeout, logger)
 
 	// Регистрируем shutdown функции в обратном порядке выполнения
+	if assemblyConsumer != nil {
+		shutdownMgr.Add("kafka_assembly_consumer", func(ctx context.Context) error {
+			return assemblyConsumer.Close()
+		})
+	}
+	if outboxDispatcher != nil {
+		shutdownMgr.Add("outbox_dispatcher", func(ctx context.Context) error {
+			return outboxDispatcher.Close()
+		})
+	}
 	shutdownMgr.Add("postgres_pool", platformshutdown.ClosePool(pool))
 	shutdownMgr.Add("http_server", platformshutdown.ShutdownHTTPServer(httpServer))
 
@@ -144,10 +198,12 @@ func Build(cfg config.Config) (*App, error) {
 	})
 
 	return &App{
-		logger:      logger,
-		httpServer:  httpServer,
-		shutdownMgr: shutdownMgr,
-		readiness:   readiness,
+		logger:           logger,
+		httpServer:       httpServer,
+		assemblyConsumer: assemblyConsumer,
+		outboxDispatcher: outboxDispatcher,
+		shutdownMgr:      shutdownMgr,
+		readiness:        readiness,
 	}, nil
 }
 
@@ -158,6 +214,10 @@ func (a *App) Run() error {
 	a.logger.Info("Starting Order service", zap.String("addr", a.httpServer.Addr))
 	a.logger.Info("Health check available", zap.String("url", "http://"+a.httpServer.Addr+"/health"))
 
+	// Создаём контекст для consumer (если настроен)
+	consumerCtx, consumerCancel := context.WithCancel(context.Background())
+	defer consumerCancel()
+
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
@@ -166,10 +226,41 @@ func (a *App) Run() error {
 		}
 	}()
 
+	// Запускаем Kafka consumer в отдельной горутине (если настроен)
+	if a.assemblyConsumer != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			if err := a.assemblyConsumer.Start(consumerCtx); err != nil {
+				a.logger.Error("kafka consumer error", zap.Error(err))
+			}
+		}()
+
+		a.logger.Info("Kafka assembly consumer started")
+	}
+
+	// Запускаем outbox dispatcher в отдельной горутине (если настроен)
+	if a.outboxDispatcher != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			if err := a.outboxDispatcher.Start(consumerCtx); err != nil {
+				a.logger.Error("outbox dispatcher error", zap.Error(err))
+			}
+		}()
+
+		a.logger.Info("Outbox dispatcher started")
+	}
+
 	// Ожидаем сигнал и выполняем shutdown
 	a.shutdownMgr.Wait()
 
+	// Отменяем контекст для остановки consumers/dispatcher
+	consumerCancel()
+
+	// Ждём завершения всех горутин (consumers/dispatcher должны завершиться по ctx.Done())
 	a.wg.Wait()
+
 	a.logger.Info("Order service stopped")
 	return nil
 }

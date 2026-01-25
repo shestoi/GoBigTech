@@ -31,12 +31,9 @@ func (s *InventoryService) GetStock(ctx context.Context, productID string) (int3
 	available, err := s.repo.GetStock(ctx, productID)
 	if err != nil {
 		// Если товар не найден, repository вернёт ErrNotFound
-		// Для демо возвращаем default=42 (repository уже делает это)
-		// В production можно обработать ErrNotFound по-другому
+		// Возвращаем ошибку, а не дефолтное значение
 		if err == repository.ErrNotFound {
-			log.Printf("Product %s not found, returning default", productID)
-			// Repository уже возвращает default, но на случай если изменится поведение
-			return 42, nil
+			log.Printf("Product %s not found", productID)
 		}
 		return 0, err
 	}

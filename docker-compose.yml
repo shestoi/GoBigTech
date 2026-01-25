@@ -50,4 +50,5 @@ volumes:
 
 networks:
   gobigtech-network:
+    name: gobigtech-network
     driver: bridge
