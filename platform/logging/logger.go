@@ -45,7 +45,7 @@ func New(cfg Config) (*zap.Logger, error) {
 	}
 
 	// Парсим уровень логирования
-	var level zapcore.Level
+	var level zapcore.Level //Создаём переменную типа zapcore.Level.
 	switch strings.ToLower(cfg.Level) {
 	case "debug":
 		level = zapcore.DebugLevel
@@ -60,40 +60,44 @@ func New(cfg Config) (*zap.Logger, error) {
 	}
 
 	// Настраиваем encoder в зависимости от формата
-	var encoder zapcore.Encoder
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "ts",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.LowercaseLevelEncoder,
-		EncodeTime:     zapcore.RFC3339NanoTimeEncoder,
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
+	// encoder - это функция, которая преобразует данные в строку
+	// encoderConfig - это конфигурация для encoder
+	var encoder zapcore.Encoder             //создаём переменную типа zapcore.Encoder
+	encoderConfig := zapcore.EncoderConfig{ //конфигурация для encoder
+		TimeKey:        "ts",                           //ключ для времени
+		LevelKey:       "level",                        //ключ для уровенля логирования
+		NameKey:        "logger",                       //ключ для имени logger
+		CallerKey:      "caller",                       //ключ для вызывающего кода
+		MessageKey:     "msg",                          //ключ для сообщения
+		StacktraceKey:  "stacktrace",                   //ключ для stacktrace
+		LineEnding:     zapcore.DefaultLineEnding,      //конец строки
+		EncodeLevel:    zapcore.LowercaseLevelEncoder,  //кодируем уровень логирования
+		EncodeTime:     zapcore.RFC3339NanoTimeEncoder, //кодируем время
+		EncodeDuration: zapcore.SecondsDurationEncoder, //кодируем duration
+		EncodeCaller:   zapcore.ShortCallerEncoder,     //кодируем вызывающий код
 	}
 
 	if cfg.Format == "json" {
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
+		encoder = zapcore.NewJSONEncoder(encoderConfig) //создаём json encoder
 	} else {
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+		encoder = zapcore.NewConsoleEncoder(encoderConfig) //создаём console encoder
 	}
 
 	// Создаём core
+	// core - это основная часть zap, которая собирает логи и отправляет их в writer
+	//Это "сборка движка"
 	core := zapcore.NewCore(
-		encoder,
-		zapcore.AddSync(os.Stderr),
-		level,
+		encoder,                    //как форматировать
+		zapcore.AddSync(os.Stderr), //куда отправлять
+		level,                      //минимальный уровень логирования
 	)
 
 	// Создаём logger с опциями
 	var opts []zap.Option
-	if cfg.AddCaller {
-		opts = append(opts, zap.AddCaller())
+	if cfg.AddCaller { //если нужно добавлять информацию о вызывающем коде
+		opts = append(opts, zap.AddCaller()) //добавляем опцию AddCaller
 	}
-	logger := zap.New(core, opts...)
+	logger := zap.New(core, opts...) //создаём logger с опциями
 
 	// Добавляем service и env ко всем логам
 	logger = logger.With(
@@ -107,6 +111,5 @@ func New(cfg Config) (*zap.Logger, error) {
 // Sync безопасно вызывает log.Sync(), игнорируя harmless ошибки
 // (например, "sync /dev/stderr: invalid argument" на некоторых системах)
 func Sync(log *zap.Logger) {
-	_ = log.Sync()
+	_ = log.Sync() //попытка дописать всё, что могло остаться в буфере
 }
-

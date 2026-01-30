@@ -1,6 +1,9 @@
 package service
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 //go:generate go run github.com/vektra/mockery/v2@v2.53.5 --name=InventoryClient --dir=. --output=./mocks --outpkg=mocks
 
@@ -22,3 +25,29 @@ type PaymentClient interface {
 	ProcessPayment(ctx context.Context, orderID, userID string, amount float64, method string) (string, error)
 }
 
+// OrderPaidEvent представляет событие успешной оплаты заказа
+type OrderPaidEvent struct {
+	OrderID       string
+	UserID        string
+	Amount        int64 // сумма в минимальных единицах (копейки, центы)
+	PaymentMethod string
+}
+
+//go:generate go run github.com/vektra/mockery/v2@v2.53.5 --name=PaymentEventPublisher --dir=. --output=./mocks --outpkg=mocks
+
+// PaymentEventPublisher определяет интерфейс для публикации событий оплаты заказа
+// Используется для отправки событий в Kafka или другие системы событий
+type PaymentEventPublisher interface {
+	// PublishOrderPaid публикует событие успешной оплаты заказа
+	PublishOrderPaid(ctx context.Context, event OrderPaidEvent) error
+}
+
+// OrderAssemblyCompletedEvent представляет событие завершения сборки заказа (входящее из Kafka)
+type OrderAssemblyCompletedEvent struct {
+	EventID      string
+	EventType    string
+	EventVersion int
+	OccurredAt   time.Time
+	OrderID      string
+	UserID       string
+}

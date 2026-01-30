@@ -40,7 +40,7 @@ func NewRepository(client *mongo.Client, dbName string) *Repository {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	// Создаём индекс (если уже существует - игнорируем ошибку)
 	_, _ = col.Indexes().CreateOne(ctx, indexModel)
 
@@ -80,8 +80,8 @@ func (r *Repository) ReserveStock(ctx context.Context, productID string, quantit
 	}
 
 	update := bson.M{
-		"$inc": bson.M{"stock": -quantity},           // уменьшить stock на quantity
-		"$set": bson.M{"updated_at": time.Now()},     // обновить updated_at
+		"$inc": bson.M{"stock": -quantity},       // уменьшить stock на quantity
+		"$set": bson.M{"updated_at": time.Now()}, // обновить updated_at
 	}
 
 	opts := options.FindOneAndUpdate().
@@ -103,5 +103,3 @@ func (r *Repository) ReserveStock(ctx context.Context, productID string, quantit
 	// Резервирование успешно
 	return true, nil
 }
-
-
