@@ -42,10 +42,52 @@ services:
     networks:
       - gobigtech-network
 
+  # PostgreSQL для IAM Service
+  iam-postgres:
+    image: postgres:15-alpine
+    container_name: iam-postgres
+    restart: unless-stopped
+    ports:
+      - "15433:5432"
+    environment:
+      POSTGRES_DB: iam
+      POSTGRES_USER: iam_user
+      POSTGRES_PASSWORD: iam_password
+    volumes:
+      - iam_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iam_user -d iam"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gobigtech-network
+
+  # Redis для IAM Service (сессии - будет использоваться позже)
+  redis:
+    image: redis:7-alpine
+    container_name: iam-redis
+    restart: unless-stopped
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gobigtech-network
+
 volumes:
   order_pg_data:
     driver: local
   inventory_mongo_data:
+    driver: local
+  iam_pg_data:
+    driver: local
+  redis_data:
     driver: local
 
 networks:

@@ -10,14 +10,14 @@ import (
 
 // Renderer рендерит шаблоны для уведомлений
 type Renderer struct {
-	logger              *zap.Logger
-	paymentTemplate     *template.Template
-	assemblyTemplate    *template.Template
+	logger           *zap.Logger
+	paymentTemplate  *template.Template
+	assemblyTemplate *template.Template
 }
 
 // NewRenderer создаёт новый renderer и загружает шаблоны
 func NewRenderer(logger *zap.Logger, templatesDir string) (*Renderer, error) {
-	paymentTemplate, err := template.ParseFiles(templatesDir + "/payment_completed.tmpl")
+	paymentTemplate, err := template.ParseFiles(templatesDir + "/payment_completed.tmpl") //paymentTemplate для загрузки шаблона для события оплаты заказа
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse payment template: %w", err)
 	}
@@ -37,6 +37,7 @@ func NewRenderer(logger *zap.Logger, templatesDir string) (*Renderer, error) {
 // RenderPaymentCompleted рендерит шаблон для события оплаты заказа
 func (r *Renderer) RenderPaymentCompleted(data interface{}) (string, error) {
 	var buf bytes.Buffer
+	//Возьми шаблон, подставь в него данные и выведи результат куда скажу
 	if err := r.paymentTemplate.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("failed to render payment template: %w", err)
 	}
@@ -51,4 +52,3 @@ func (r *Renderer) RenderAssemblyCompleted(data interface{}) (string, error) {
 	}
 	return buf.String(), nil
 }
-

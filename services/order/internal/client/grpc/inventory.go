@@ -3,7 +3,12 @@ package grpcclient
 import (
 	"context"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
 	inventorypb "github.com/shestoi/GoBigTech/services/inventory/v1"
+	"github.com/shestoi/GoBigTech/services/order/internal/authctx"
 	"github.com/shestoi/GoBigTech/services/order/internal/service"
 )
 
@@ -21,15 +26,19 @@ func NewInventoryClientAdapter(client inventorypb.InventoryServiceClient) servic
 }
 
 // ReserveStock реализует service.InventoryClient интерфейс
-// Преобразует простые типы в protobuf структуры и обратно
+// Прокидывает x-session-id из context в gRPC metadata для Inventory interceptor
 func (a *InventoryClientAdapter) ReserveStock(ctx context.Context, productID string, quantity int32) error {
-	// Преобразуем простые типы в protobuf запрос
+	sid, ok := authctx.SessionIDFromContext(ctx)
+	if !ok || sid == "" {
+		return status.Error(codes.Unauthenticated, "session_id is required")
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "x-session-id", sid)
+
 	req := &inventorypb.ReserveStockRequest{
 		ProductId: productID,
 		Quantity:  quantity,
 	}
 
-	// Вызываем gRPC клиент
 	resp, err := a.client.ReserveStock(ctx, req)
 	if err != nil {
 		return err

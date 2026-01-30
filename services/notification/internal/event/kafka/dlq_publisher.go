@@ -50,7 +50,7 @@ func (p *DLQPublisher) Publish(ctx context.Context, originalMessage kafka.Messag
 	if originalErr != nil {
 		errorMsg = originalErr.Error()
 	}
-
+	//dlqMsg - сообщение для DLQ
 	dlqMsg := DLQMessage{
 		OriginalTopic:     originalMessage.Topic,
 		OriginalPartition: originalMessage.Partition,
@@ -64,6 +64,7 @@ func (p *DLQPublisher) Publish(ctx context.Context, originalMessage kafka.Messag
 		OrderID:           orderID,
 	}
 
+	//payload - сообщение для DLQ в формате JSON
 	payload, err := json.Marshal(dlqMsg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal DLQ message: %w", err)
@@ -75,11 +76,13 @@ func (p *DLQPublisher) Publish(ctx context.Context, originalMessage kafka.Messag
 		key = []byte(orderID)
 	}
 
+	//msg - сообщение для DLQ в формате Kafka
 	msg := kafka.Message{
 		Key:   key,
 		Value: payload,
 	}
 
+	//writeErr - ошибка при записи сообщения в DLQ
 	if writeErr := p.writer.WriteMessages(ctx, msg); writeErr != nil {
 		p.logger.Error("failed to publish message to DLQ",
 			zap.Error(writeErr),
@@ -90,6 +93,7 @@ func (p *DLQPublisher) Publish(ctx context.Context, originalMessage kafka.Messag
 		return writeErr
 	}
 
+	//logger - логгер для записи сообщения в DLQ
 	p.logger.Info("message published to DLQ",
 		zap.String("original_topic", originalMessage.Topic),
 		zap.Int("original_partition", originalMessage.Partition),
@@ -105,4 +109,3 @@ func (p *DLQPublisher) Close() error {
 	p.logger.Info("closing DLQ publisher")
 	return p.writer.Close()
 }
-

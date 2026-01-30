@@ -41,6 +41,9 @@ type Config struct {
 
 	// Templates
 	TemplatesDir string
+
+	// IAM
+	IAMGRPCAddr string // адрес IAM Service для получения контактной информации пользователей
 }
 
 // Load загружает конфигурацию из переменных окружения
@@ -122,11 +125,18 @@ func Load() (Config, error) {
 	// Telegram
 	telegramEnabledStr := getString("TELEGRAM_ENABLED", "false")
 	cfg.TelegramEnabled = telegramEnabledStr == "true" || telegramEnabledStr == "1"
-	cfg.TelegramBotToken = getString("TELEGRAM_BOT_TOKEN", "ASOS:GERMANY")
+	cfg.TelegramBotToken = getString("TELEGRAM_BOT_TOKEN", "8523796732:AAEkeA6oFQrQNBpl6DYekxK-wbn83bQL9Jg")
 	cfg.TelegramChatID = getString("TELEGRAM_CHAT_ID", "6721014060")
 
 	// Templates directory
 	cfg.TemplatesDir = getString("TEMPLATES_DIR", "./templates")
+
+	// IAM_GRPC_ADDR
+	if cfg.AppEnv == EnvLocal {
+		cfg.IAMGRPCAddr = getString("IAM_GRPC_ADDR", "127.0.0.1:50053")
+	} else {
+		cfg.IAMGRPCAddr = getString("IAM_GRPC_ADDR", "iam:50053")
+	}
 
 	// Валидация
 	if err := cfg.Validate(); err != nil {
@@ -180,6 +190,9 @@ func (c Config) Validate() error {
 	if c.TemplatesDir == "" {
 		return fmt.Errorf("TEMPLATES_DIR is required")
 	}
+	if c.IAMGRPCAddr == "" {
+		return fmt.Errorf("IAM_GRPC_ADDR is required")
+	}
 	return nil
 }
 
@@ -203,6 +216,7 @@ func (c Config) Log() {
 		log.Printf("  TELEGRAM_CHAT_ID: %s", c.TelegramChatID)
 	}
 	log.Printf("  TEMPLATES_DIR: %s", c.TemplatesDir)
+	log.Printf("  IAM_GRPC_ADDR: %s", c.IAMGRPCAddr)
 }
 
 // getString читает переменную окружения или возвращает дефолт

@@ -253,11 +253,12 @@ func (r *Repository) SaveWithOutbox(ctx context.Context, order repository.Order,
 }
 
 // GetPendingOutboxEvents получает pending события из outbox для отправки
+// pending - это статус события, которое нужно отправить
 func (r *Repository) GetPendingOutboxEvents(ctx context.Context, limit int) ([]repository.OutboxEvent, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT event_id, event_type, occurred_at, aggregate_id, payload, topic, status, attempts, last_error, created_at, sent_at
 		 FROM order_outbox_events
-		 WHERE status = 'pending'
+		 WHERE status = 'pending' 
 		 ORDER BY created_at ASC
 		 LIMIT $1`,
 		limit)

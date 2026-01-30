@@ -105,4 +105,3 @@ func TestMemoryProcessedEventsStore_IdempotentMarkProcessed(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, processed)
 }
-

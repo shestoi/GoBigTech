@@ -91,6 +91,10 @@ curl -i http://127.0.0.1:8080/health
 3. Соединение с PostgreSQL закрывается (pool.Close)
 4. Сервис завершает работу
 
+### Аутентификация (x-session-id)
+
+Для маршрутов **POST /orders** и **GET /orders/{id}** клиент обязан передавать HTTP-заголовок **x-session-id** (session_id после Login в IAM). Без заголовка возвращается **401 Unauthorized** с текстом `session_id is required`. Order прокидывает session_id в gRPC metadata при вызовах Inventory. Endpoint **/health** не требует сессии. Если сессия истекла — клиент должен снова вызвать IAM Login и использовать новый session_id.
+
 ## База данных (PostgreSQL)
 
 Order Service использует PostgreSQL для хранения заказов.

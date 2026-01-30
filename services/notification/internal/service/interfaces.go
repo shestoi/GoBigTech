@@ -25,4 +25,3 @@ type OrderAssemblyCompletedEvent struct {
 	OrderID      string
 	UserID       string
 }
-

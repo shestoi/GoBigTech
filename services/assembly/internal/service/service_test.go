@@ -188,4 +188,3 @@ func TestService_HandleOrderPaid_PublisherError(t *testing.T) {
 	mockPublisher.AssertExpectations(t)
 	mockStore.AssertExpectations(t)
 }
-

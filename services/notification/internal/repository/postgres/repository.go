@@ -2,11 +2,11 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/shestoi/GoBigTech/services/notification/internal/repository"
 )
 
 // Repository реализует NotificationRepository используя PostgreSQL
@@ -21,40 +21,56 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	}
 }
 
-// InsertInboxEventTx вставляет событие в inbox таблицу в транзакции
-// Возвращает inserted=true если событие впервые обработано, inserted=false если duplicate
-func (r *Repository) InsertInboxEventTx(ctx context.Context, eventID, eventType string, occurredAt time.Time, orderID, topic string, partition int, message_offset int64) (inserted bool, err error) {
-	// Начинаем транзакцию
+// UpsertInboxPending создаёт запись со статусом pending если её нет; если есть sent — AlreadyProcessed; если pending — CanProcess (retry)
+func (r *Repository) UpsertInboxPending(ctx context.Context, eventID, eventType string, occurredAt time.Time, orderID, topic string, partition int, messageOffset int64) (*repository.InboxUpsertResult, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
-	// Пытаемся вставить событие в inbox
+	now := time.Now()
 	_, err = tx.Exec(ctx,
-		`INSERT INTO notification_inbox_events (event_id, event_type, occurred_at, order_id, topic, partition, message_offset)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		eventID, eventType, occurredAt, orderID, topic, partition, message_offset)
-
+		`INSERT INTO notification_inbox_events (event_id, event_type, occurred_at, order_id, topic, partition, message_offset, status, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
+		 ON CONFLICT (event_id) DO NOTHING`,
+		eventID, eventType, occurredAt, orderID, topic, partition, messageOffset, now)
 	if err != nil {
-		// Проверяем, это duplicate key error?
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
-			// Событие уже обработано
-			return false, nil
-		}
-		// Другая ошибка
-		return false, err
+		return nil, err
 	}
 
-	// Событие впервые обработано
-	inserted = true
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM notification_inbox_events WHERE event_id = $1`, eventID).Scan(&status)
+	if err != nil {
+		return nil, err
+	}
 
-	// Коммитим транзакцию
 	if err = tx.Commit(ctx); err != nil {
-		return false, err
+		return nil, err
 	}
 
-	return inserted, nil
+	res := &repository.InboxUpsertResult{}
+	switch status {
+	case "sent":
+		res.AlreadyProcessed = true
+	case "pending":
+		res.CanProcess = true
+	}
+	return res, nil
+}
+
+// MarkInboxSent переводит запись в статус sent
+func (r *Repository) MarkInboxSent(ctx context.Context, eventID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE notification_inbox_events SET status = 'sent', updated_at = now(), last_error = NULL WHERE event_id = $1`,
+		eventID)
+	return err
+}
+
+// MarkInboxFailed сохраняет last_error для записи (остаётся pending для retry)
+func (r *Repository) MarkInboxFailed(ctx context.Context, eventID string, errString string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE notification_inbox_events SET last_error = $2, updated_at = now() WHERE event_id = $1 AND status = 'pending'`,
+		eventID, errString)
+	return err
 }
