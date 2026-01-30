@@ -27,13 +27,13 @@ func NewOutboxDispatcher(
 	logger *zap.Logger,
 	repo repository.OrderRepository,
 	brokers []string,
-	batchSize int,
-	interval time.Duration,
-	maxRetries int,
-	backoff time.Duration,
+	batchSize int, //batchSize - количество событий, которые будут обработаны за один раз
+	interval time.Duration, //interval - интервал между обработками
+	maxRetries int, //maxRetries - максимальное количество попыток обработки события
+	backoff time.Duration, //backoff - интервал между попытками обработки события
 ) *OutboxDispatcher {
 	writer := &kafka.Writer{
-
+		//writer - writer для записи событий в Kafka
 		Addr:     kafka.TCP(brokers...),
 		Balancer: &kafka.LeastBytes{},
 	}
@@ -60,7 +60,7 @@ func (d *OutboxDispatcher) Start(ctx context.Context) error {
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
-	// Обрабатываем сразу при старте
+	// Обрабатываем сразу при старте dispatcher
 	if err := d.processBatch(ctx); err != nil {
 		d.logger.Error("failed to process initial batch", zap.Error(err))
 	}
@@ -70,7 +70,7 @@ func (d *OutboxDispatcher) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			d.logger.Info("outbox dispatcher context cancelled, stopping")
 			return nil
-		case <-ticker.C:
+		case <-ticker.C: //ticker.C - канал, который отправляет сигнал через интервал
 			if err := d.processBatch(ctx); err != nil {
 				d.logger.Error("failed to process batch", zap.Error(err))
 			}
@@ -80,12 +80,12 @@ func (d *OutboxDispatcher) Start(ctx context.Context) error {
 
 // processBatch обрабатывает батч pending событий
 func (d *OutboxDispatcher) processBatch(ctx context.Context) error {
-	// Проверяем контекст перед запросом к БД
+	// Проверяем контекст перед запросом к БД, если контекст отменён, возвращаем ошибку
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
-	events, err := d.repo.GetPendingOutboxEvents(ctx, d.batchSize)
+	events, err := d.repo.GetPendingOutboxEvents(ctx, d.batchSize) //d.batchSize - количество событий, которые будут обработаны за один раз
 	if err != nil {
 		// Если контекст отменён, не логируем как ошибку
 		if ctx.Err() != nil {
@@ -108,7 +108,7 @@ func (d *OutboxDispatcher) processBatch(ctx context.Context) error {
 			return ctx.Err()
 		}
 
-		if err := d.processEvent(ctx, event); err != nil {
+		if err := d.processEvent(ctx, event); err != nil { //processEvent - функция для обработки события
 			// Если контекст отменён, прекращаем обработку
 			if ctx.Err() != nil {
 				return ctx.Err()

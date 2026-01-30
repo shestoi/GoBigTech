@@ -32,26 +32,26 @@ func (s *MemoryProcessedEventsStore) MarkProcessed(ctx context.Context, eventID 
 
 	// Сохраняем время истечения
 	expiresAt := time.Now().Add(ttl)
-	s.events[eventID] = expiresAt
+	s.events[eventID] = expiresAt //сохраняем время истечения
 
 	return nil
 }
 
 // IsProcessed проверяет, был ли eventID уже обработан
 func (s *MemoryProcessedEventsStore) IsProcessed(ctx context.Context, eventID string) (bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.RLock()         //читаем данные
+	defer s.mu.RUnlock() //освобождаем lock
 
 	// Ленивая очистка протухших записей (нужно переключиться на write lock)
-	s.mu.RUnlock()
-	s.mu.Lock()
-	s.cleanupExpiredLocked()
-	s.mu.Unlock()
-	s.mu.RLock()
+	s.mu.RUnlock()           //освобождаем read lock
+	s.mu.Lock()              //захватываем write lock
+	s.cleanupExpiredLocked() //очищаем протухшие записи
+	s.mu.Unlock()            //освобождаем write lock
+	s.mu.RLock()             //захватываем read lock
 
-	expiresAt, exists := s.events[eventID]
+	expiresAt, exists := s.events[eventID] //получаем время истечения
 	if !exists {
-		return false, nil
+		return false, nil //если запись не найдена, возвращаем false
 	}
 
 	// Проверяем, не истёк ли ttl

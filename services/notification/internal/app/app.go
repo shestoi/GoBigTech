@@ -12,6 +12,7 @@ import (
 
 	platformlogging "github.com/shestoi/GoBigTech/platform/logging"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
+	grpcclient "github.com/shestoi/GoBigTech/services/notification/internal/client/grpc"
 	"github.com/shestoi/GoBigTech/services/notification/internal/config"
 	eventkafka "github.com/shestoi/GoBigTech/services/notification/internal/event/kafka"
 	"github.com/shestoi/GoBigTech/services/notification/internal/repository/postgres"
@@ -103,13 +104,24 @@ func Build(cfg config.Config) (*App, error) {
 		return nil, fmt.Errorf("failed to create template renderer: %w", err)
 	}
 
+	// Подключаемся к IAM Service для получения контактной информации пользователей
+	logger.Info("Connecting to IAM service", zap.String("addr", cfg.IAMGRPCAddr))
+	iamClient, iamConn, err := grpcclient.NewIAMGRPCClient(cfg.IAMGRPCAddr, logger)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to connect to IAM service: %w", err)
+	}
+
+	// Создаём адаптер для IAM клиента
+	iamClientAdapter := grpcclient.NewIAMClientAdapter(iamClient, logger)
+
 	// Создаём service слой
 	notificationService := service.NewNotificationService(
 		logger,
 		notificationRepo,
 		telegramSender,
 		renderer,
-		cfg.TelegramChatID,
+		iamClientAdapter,
 	)
 
 	// Создаём DLQ publisher
@@ -154,6 +166,10 @@ func Build(cfg config.Config) (*App, error) {
 	})
 	shutdownMgr.Add("dlq_publisher", func(ctx context.Context) error {
 		return dlqPublisher.Close()
+	})
+	shutdownMgr.Add("iam_conn", func(ctx context.Context) error {
+		iamConn.Close()
+		return nil
 	})
 	shutdownMgr.Add("postgres_pool", platformshutdown.ClosePool(pool))
 

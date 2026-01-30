@@ -5,6 +5,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	platformhealth "github.com/shestoi/GoBigTech/platform/health/http"
+
+	"github.com/shestoi/GoBigTech/services/order/internal/api/http/middleware"
 )
 
 // NewRouter создаёт и настраивает HTTP роутер для Order Service
@@ -14,14 +16,17 @@ import (
 func NewRouter(handler *Handler, readiness func() bool) chi.Router {
 	router := chi.NewRouter()
 
-	// Регистрируем обработчики заказов
-	router.Post("/orders", handler.PostOrders)
-	router.Get("/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := chi.URLParam(r, "id")
-		handler.GetOrdersId(w, r, id)
+	// /orders* требуют x-session-id (middleware возвращает 401 при отсутствии)
+	router.Route("/orders", func(r chi.Router) {
+		r.Use(middleware.WithSessionID)
+		r.Post("/", handler.PostOrders)
+		r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
+			id := chi.URLParam(r, "id")
+			handler.GetOrdersId(w, r, id)
+		})
 	})
 
-	// Регистрируем health check (используем platform health handler с readiness)
+	// Health без middleware (не требует сессии)
 	router.Get("/health", platformhealth.Handler(readiness))
 
 	return router

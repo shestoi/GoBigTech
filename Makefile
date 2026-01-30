@@ -45,6 +45,7 @@ build:
 	go build ./services/order/cmd/order
 	go build ./services/inventory/cmd/inventory
 	go build ./services/payment/cmd/payment
+	go build ./services/iam/cmd/iam
 
 # ---- Kafka ----
 kafka-up:
@@ -107,7 +108,10 @@ migrate-up-order:
 	cd services/order && goose -dir migrations postgres "postgres://order_user:order_password@127.0.0.1:15432/orders?sslmode=disable" up
 
 migrate-up-notification:
-	cd services/notification && goose -dir migrations postgres "postgres://order_user:order_password@127.0.0.1:15432/orders?sslmode=disable" up
+	cd services/notification && go run github.com/pressly/goose/v3/cmd/goose@latest -dir migrations postgres "postgres://order_user:order_password@127.0.0.1:15432/orders?sslmode=disable" up
+
+migrate-up-iam:
+	cd services/iam && goose -dir migrations postgres "postgres://iam_user:iam_password@127.0.0.1:15433/iam?sslmode=disable" up
 
 # ---- Services ----
 order-run:
@@ -118,3 +122,9 @@ assembly-run:
 
 notification-run:
 	cd services/notification && APP_ENV=local go run ./cmd/notification
+
+iam-run:
+	cd services/iam && APP_ENV=local go run ./cmd/iam
+
+inventory-run:
+	cd services/inventory && APP_ENV=local go run ./cmd/inventory

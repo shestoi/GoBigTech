@@ -15,7 +15,9 @@ import (
 	platformlogging "github.com/shestoi/GoBigTech/platform/logging"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
 	grpcapi "github.com/shestoi/GoBigTech/services/inventory/internal/api/grpc"
+	iamclient "github.com/shestoi/GoBigTech/services/inventory/internal/client/grpc"
 	"github.com/shestoi/GoBigTech/services/inventory/internal/config"
+	"github.com/shestoi/GoBigTech/services/inventory/internal/interceptor"
 	mongorepo "github.com/shestoi/GoBigTech/services/inventory/internal/repository/mongo"
 	"github.com/shestoi/GoBigTech/services/inventory/internal/service"
 	inventorypb "github.com/shestoi/GoBigTech/services/inventory/v1"
@@ -82,18 +84,35 @@ func Build(cfg config.Config) (*App, error) {
 	// Создаём service слой
 	inventoryService := service.NewInventoryService(inventoryRepo)
 
+	// Подключаемся к IAM Service для проверки сессий
+	logger.Info("Connecting to IAM service", zap.String("addr", cfg.IAMGRPCAddr))
+	iamClient, iamConn, err := iamclient.NewIAMGRPCClient(cfg.IAMGRPCAddr, logger)
+	if err != nil {
+		client.Disconnect(ctx)
+		return nil, err
+	}
+
+	// Создаём адаптер для IAM клиента
+	iamClientAdapter := iamclient.NewIAMClientAdapter(iamClient, logger)
+
+	// Создаём auth interceptor
+	authInterceptor := interceptor.NewAuthInterceptor(iamClientAdapter, logger)
+
 	// Создаём gRPC handler
 	grpcHandler := grpcapi.NewHandler(inventoryService)
 
 	// Слушаем на указанном адресе
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
+		iamConn.Close()
 		client.Disconnect(ctx)
 		return nil, err
 	}
 
-	// Создаем gRPC сервер
-	grpcServer := grpc.NewServer()
+	// Создаем gRPC сервер с auth interceptor
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(authInterceptor.Unary()),
+	)
 
 	// Включаем reflection, если указано в конфиге
 	if cfg.EnableGRPCReflection {
@@ -115,6 +134,10 @@ func Build(cfg config.Config) (*App, error) {
 
 	// Регистрируем shutdown функции в обратном порядке выполнения
 	shutdownMgr.Add("mongodb", platformshutdown.DisconnectMongo(client))
+	shutdownMgr.Add("iam_conn", func(ctx context.Context) error {
+		iamConn.Close()
+		return nil
+	})
 	shutdownMgr.Add("grpc_server", platformshutdown.ShutdownGRPCServer(grpcServer))
 	shutdownMgr.Add("health_readiness", platformshutdown.SetHealthNotServing(health))
 
