@@ -63,7 +63,7 @@ services:
     networks:
       - gobigtech-network
 
-  # Redis для IAM Service (сессии - будет использоваться позже)
+  # Redis для IAM Service (сессии)
   redis:
     image: redis:7-alpine
     container_name: iam-redis
@@ -80,6 +80,287 @@ services:
     networks:
       - gobigtech-network
 
+  # --- Observability stack ---
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.112.0
+    container_name: otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"] # --config=/etc/otel-collector-config.yaml - это команда для запуска otel-collector
+    volumes:
+      - ./deploy/otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+      - "13133:13133"
+    networks:
+      - gobigtech-network
+    depends_on: # depends_on - это зависимость для otel-collector, которая зависит от jaeger
+      - jaeger
+
+  jaeger: # jaeger - это контейнер для jaeger, который используется для трассировки запросов
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+    networks:
+      - gobigtech-network
+
+  prometheus: # prometheus - это контейнер для prometheus, который используется для сбора метрик
+    image: prom/prometheus:v2.53.1
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - gobigtech-network
+    depends_on:
+      - otel-collector
+
+  alertmanager: # alertmanager - это контейнер для alertmanager, который используется для отправки уведомлений
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - gobigtech-network
+
+  grafana: # grafana - это контейнер для grafana, который используется для визуализации данных
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: light
+      GF_SERVER_HTTP_PORT: 3000
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - gobigtech-network
+    depends_on:
+      - prometheus
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gobigtech-network
+
+  kibana: # kibana - это контейнер для kibana, который используется для визуализации данных
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    container_name: kibana
+    restart: unless-stopped
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - gobigtech-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  filebeat: # filebeat - это контейнер для filebeat, который используется для сбора логов
+    image: docker.elastic.co/beats/filebeat:8.15.0
+    container_name: filebeat
+    restart: unless-stopped
+    user: root
+    volumes:
+      - ./deploy/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - gobigtech-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # --- Application services ---
+  iam:
+    build:
+      context: .
+      dockerfile: ./services/iam/Dockerfile
+    container_name: iam
+    restart: unless-stopped
+    depends_on:
+      iam-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    environment:
+      APP_ENV: docker
+      OTEL_ENABLED: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SAMPLING_RATIO: "1.0"
+      IAM_POSTGRES_DSN: postgres://iam_user:iam_password@iam-postgres:5432/iam?sslmode=disable
+      REDIS_ADDR: redis:6379
+    networks:
+      - gobigtech-network
+    ports:
+      - "50053:50053"
+
+  inventory:
+    build:
+      context: .
+      dockerfile: ./services/inventory/Dockerfile
+    container_name: inventory
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      iam:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    environment:
+      APP_ENV: docker
+      OTEL_ENABLED: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SAMPLING_RATIO: "1.0"
+      INVENTORY_MONGO_URI: mongodb://inventory_user:inventory_password@mongo:27017/?authSource=admin
+      IAM_GRPC_ADDR: iam:50053
+    networks:
+      - gobigtech-network
+    ports:
+      - "50051:50051"
+
+  payment:
+    build:
+      context: .
+      dockerfile: ./services/payment/Dockerfile
+    container_name: payment
+    restart: unless-stopped
+    depends_on:
+      otel-collector:
+        condition: service_started
+    environment:
+      APP_ENV: docker
+      OTEL_ENABLED: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SAMPLING_RATIO: "1.0"
+    networks:
+      - gobigtech-network
+    ports:
+      - "50052:50052"
+
+  order:
+    build:
+      context: .
+      dockerfile: ./services/order/Dockerfile
+    container_name: order
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      inventory:
+        condition: service_started
+      payment:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    environment:
+      APP_ENV: docker
+      OTEL_ENABLED: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SAMPLING_RATIO: "1.0"
+      ORDER_POSTGRES_DSN: postgres://order_user:order_password@postgres:5432/orders?sslmode=disable
+      INVENTORY_GRPC_ADDR: inventory:50051
+      PAYMENT_GRPC_ADDR: payment:50052
+      KAFKA_BROKERS: kafka:9092
+    networks:
+      - gobigtech-network
+    ports:
+      - "8080:8080"
+
+  assembly:
+    build:
+      context: .
+      dockerfile: ./services/assembly/Dockerfile
+    container_name: assembly
+    restart: unless-stopped
+    depends_on:
+      otel-collector:
+        condition: service_started
+    environment:
+      APP_ENV: docker
+      OTEL_ENABLED: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SAMPLING_RATIO: "1.0"
+      KAFKA_BROKERS: kafka:9092
+    networks:
+      - gobigtech-network
+
+  notification:
+    build:
+      context: .
+      dockerfile: ./services/notification/Dockerfile
+    container_name: notification
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      iam:
+        condition: service_started
+      alertmanager:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    environment:
+      APP_ENV: docker
+      OTEL_ENABLED: "1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SAMPLING_RATIO: "1.0"
+      NOTIFICATION_POSTGRES_DSN: postgres://order_user:order_password@postgres:5432/orders?sslmode=disable
+      IAM_GRPC_ADDR: iam:50053
+      KAFKA_BROKERS: kafka:9092
+      ALERTS_HTTP_ADDR: "0.0.0.0:8081"
+      TELEGRAM_DISABLE: ${TELEGRAM_DISABLE:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+    networks:
+      - gobigtech-network
+    ports:
+      - "8081:8081"
+
 volumes:
   order_pg_data:
     driver: local
@@ -88,6 +369,14 @@ volumes:
   iam_pg_data:
     driver: local
   redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+  grafana_data:
+    driver: local
+  elasticsearch_data:
     driver: local
 
 networks:

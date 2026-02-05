@@ -27,6 +27,11 @@ type Config struct {
 	IAMGRPCAddr          string // адрес IAM Service для проверки сессий
 	EnableGRPCReflection bool
 	ShutdownTimeout      time.Duration
+
+	// OpenTelemetry
+	OTelEnabled       bool
+	OTelEndpoint      string
+	OTelSamplingRatio float64
 }
 
 // Load загружает конфигурацию из переменных окружения
@@ -77,6 +82,15 @@ func Load() (Config, error) {
 	}
 	cfg.ShutdownTimeout = shutdownTimeout
 
+	// OpenTelemetry
+	cfg.OTelEnabled = getBool("OTEL_ENABLED", false)
+	if cfg.AppEnv == EnvLocal {
+		cfg.OTelEndpoint = getString("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317")
+	} else {
+		cfg.OTelEndpoint = getString("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+	}
+	cfg.OTelSamplingRatio = getFloat64("OTEL_SAMPLING_RATIO", 1.0)
+
 	// Валидация
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -102,6 +116,9 @@ func (c Config) Validate() error {
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("SHUTDOWN_TIMEOUT must be positive")
 	}
+	if c.OTelEnabled && (c.OTelSamplingRatio < 0 || c.OTelSamplingRatio > 1) {
+		return fmt.Errorf("OTEL_SAMPLING_RATIO must be in [0, 1]")
+	}
 	return nil
 }
 
@@ -115,6 +132,22 @@ func (c Config) Log() {
 	log.Printf("  IAM_GRPC_ADDR: %s", c.IAMGRPCAddr)
 	log.Printf("  ENABLE_GRPC_REFLECTION: %v", c.EnableGRPCReflection)
 	log.Printf("  SHUTDOWN_TIMEOUT: %s", c.ShutdownTimeout)
+	log.Printf("  OTEL_ENABLED: %v", c.OTelEnabled)
+	log.Printf("  OTEL_EXPORTER_OTLP_ENDPOINT: %s", c.OTelEndpoint)
+	log.Printf("  OTEL_SAMPLING_RATIO: %f", c.OTelSamplingRatio)
+}
+
+func getFloat64(key string, defaultValue float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	var f float64
+	_, err := fmt.Sscanf(value, "%f", &f)
+	if err != nil {
+		return defaultValue
+	}
+	return f
 }
 
 // getString читает переменную окружения или возвращает дефолт

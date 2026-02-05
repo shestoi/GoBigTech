@@ -1,0 +1,39 @@
+global: # global - это глобальные настройки для prometheus
+  scrape_interval: 15s # scrape_interval - это время ожидания для сбора данных
+  evaluation_interval: 15s # evaluation_interval - это время ожидания для оценки правил
+
+rule_files: # rule_files - это файлы правил для prometheus
+  - /etc/prometheus/rules.yml
+
+alerting: # alerting - это алертинг для prometheus, который используется для отправки уведомлений
+  alertmanagers: # alertmanagers - это алертинг для prometheus, который используется для отправки уведомлений
+    - static_configs: # static_configs - это статические конфигурации для алертинга
+        - targets: [alertmanager:9093] # targets - это целевые сервера для алертинга
+
+scrape_configs: # scrape_configs - это конфигурации для сбора данных для prometheus
+  # OpenTelemetry Collector metrics (and re-exported app metrics)
+  # Метрики из сервисов (order, inventory, payment, iam, assembly) идут через OTLP в collector,
+  # collector реэкспортирует их на :8889/metrics в формате Prometheus.
+  - job_name: otel-collector # job_name - это имя для job
+    static_configs: # static_configs - это статические конфигурации для сбора данных,
+      - targets: [otel-collector:8889] # targets - это целевые сервера для сбора данных
+    metrics_path: /metrics # metrics_path - это путь для сбора данных
+    scrape_interval: 10s # scrape_interval - это время ожидания для сбора данных
+
+  # Если сервисы экспонируют /metrics напрямую (не через OTLP), можно добавить прямые targets:
+  # На Mac/Windows используем host.docker.internal для доступа к хосту из контейнера.
+  # На Linux может потребоваться другой способ (host network mode или специальная сеть).
+  # Примеры (раскомментируйте если нужно):
+  # - job_name: order-service
+  #   static_configs:
+  #     - targets: [host.docker.internal:8080]
+  #   metrics_path: /metrics
+  # - job_name: inventory-service
+  #   static_configs:
+  #     - targets: [host.docker.internal:<inventory_metrics_port>]
+  #   metrics_path: /metrics
+
+  # Prometheus self-monitoring
+  - job_name: prometheus # job_name - это имя для job
+    static_configs: # static_configs - это статические конфигурации для сбора данных
+      - targets: [localhost:9090] # targets - это целевые сервера для сбора данных

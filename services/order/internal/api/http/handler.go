@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	platformobservability "github.com/shestoi/GoBigTech/platform/observability"
 	"github.com/shestoi/GoBigTech/services/order/internal/repository"
 	"github.com/shestoi/GoBigTech/services/order/internal/service"
 )
@@ -51,7 +52,8 @@ func (h *Handler) PostOrders(w http.ResponseWriter, r *http.Request) {
 	const op = "Handler.PostOrders"
 	ctx := r.Context()
 
-	logger := h.logger.With(zap.String("op", op))
+	// observability.L добавляет trace_id/span_id в лог при включённом OTEL
+	logger := platformobservability.L(ctx, h.logger.With(zap.String("op", op)))
 	logger.Info("Received request", zap.String("method", r.Method), zap.String("path", r.URL.Path))
 
 	// Декодируем JSON тело запроса

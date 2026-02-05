@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	platformlogging "github.com/shestoi/GoBigTech/platform/logging"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
+	httpapi "github.com/shestoi/GoBigTech/services/notification/internal/api/http"
 	grpcclient "github.com/shestoi/GoBigTech/services/notification/internal/client/grpc"
 	"github.com/shestoi/GoBigTech/services/notification/internal/config"
 	eventkafka "github.com/shestoi/GoBigTech/services/notification/internal/event/kafka"
@@ -24,6 +26,7 @@ import (
 // App содержит все зависимости для запуска и корректного shutdown Notification Service
 type App struct {
 	logger           *zap.Logger
+	alertServer      *http.Server
 	paymentConsumer  *eventkafka.OrderPaidConsumer
 	assemblyConsumer *eventkafka.OrderAssemblyCompletedConsumer
 	shutdownMgr      *platformshutdown.Manager
@@ -154,10 +157,35 @@ func Build(cfg config.Config) (*App, error) {
 		cfg.NotificationKafkaRetryBackoffBase,
 	)
 
+	// HTTP сервер для приёма webhook от Alertmanager (алерты в Telegram)
+	var alertServer *http.Server
+	alertListenAddr := cfg.AlertsHTTPAddr
+	if alertListenAddr == "" && cfg.HTTPAlertPort != "" {
+		alertListenAddr = ":" + cfg.HTTPAlertPort
+	}
+	if alertListenAddr != "" {
+		alertChatID := cfg.AlertTelegramChatID
+		if cfg.TelegramDisable {
+			alertChatID = ""
+		}
+		alertHandler := httpapi.NewAlertmanagerHandler(logger, telegramSender, alertChatID)
+		alertRouter := httpapi.NewAlertRouter(alertHandler)
+		alertServer = &http.Server{
+			Addr:         alertListenAddr,
+			Handler:      alertRouter,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 15 * time.Second,
+		}
+		logger.Info("Alertmanager webhook server configured", zap.String("addr", alertServer.Addr), zap.String("path", "/alerts"))
+	}
+
 	// Создаём shutdown manager
 	shutdownMgr := platformshutdown.New(cfg.ShutdownTimeout, logger)
 
 	// Регистрируем shutdown функции в обратном порядке выполнения
+	if alertServer != nil {
+		shutdownMgr.Add("alert_http_server", platformshutdown.ShutdownHTTPServer(alertServer))
+	}
 	shutdownMgr.Add("kafka_assembly_consumer", func(ctx context.Context) error {
 		return assemblyConsumer.Close()
 	})
@@ -175,6 +203,7 @@ func Build(cfg config.Config) (*App, error) {
 
 	return &App{
 		logger:           logger,
+		alertServer:      alertServer,
 		paymentConsumer:  paymentConsumer,
 		assemblyConsumer: assemblyConsumer,
 		shutdownMgr:      shutdownMgr,
@@ -190,6 +219,18 @@ func (a *App) Run() error {
 	// Создаём контексты для consumers
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Запускаем HTTP сервер для алертов (webhook)
+	if a.alertServer != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			if err := a.alertServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				a.logger.Error("alert HTTP server error", zap.Error(err))
+			}
+		}()
+		a.logger.Info("Alert webhook server listening", zap.String("addr", a.alertServer.Addr))
+	}
 
 	// Запускаем payment consumer в отдельной горутине
 	a.wg.Add(1)

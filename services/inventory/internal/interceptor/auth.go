@@ -87,7 +87,7 @@ func (a *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 			return nil, status.Error(codes.Unauthenticated, "invalid or expired session")
 		}
 
-		// Добавляем user_id в контекст для использования в handlers
+		// Добавляем user_id в контекст для использования в handlers userIDKey - ключ для хранения user_id в context 
 		ctx = context.WithValue(ctx, userIDKey, userID)
 
 		a.logger.Debug("session validated",

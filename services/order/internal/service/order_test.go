@@ -14,6 +14,11 @@ import (
 	"github.com/shestoi/GoBigTech/services/order/internal/service/mocks"
 )
 
+// anyContext matches any context (CreateOrder passes context with spans to clients/repo).
+func anyContext() interface{} {
+	return mock.MatchedBy(func(context.Context) bool { return true })
+}
+
 func TestOrderService_CreateOrder(t *testing.T) {
 	ctx := context.Background()
 
@@ -203,13 +208,13 @@ func TestOrderService_CreateOrder(t *testing.T) {
 			mockRepo := repoMocks.NewOrderRepository(t)
 
 			logger := zap.NewNop()
-			service := NewOrderService(logger, mockInventory, mockPayment, mockRepo, "order.payment.completed")
+			service := NewOrderService(logger, mockInventory, mockPayment, mockRepo, "order.payment.completed", nil)
 
 			// Настройка моков для inventory (для каждого item)
 			if tt.inventoryErrors != nil {
 				for _, item := range tt.input.Items {
 					err := tt.inventoryErrors[item.ProductID]
-					mockInventory.On("ReserveStock", ctx, item.ProductID, item.Quantity).
+					mockInventory.On("ReserveStock", anyContext(), item.ProductID, item.Quantity).
 						Return(err).Once()
 				}
 			}
@@ -225,7 +230,7 @@ func TestOrderService_CreateOrder(t *testing.T) {
 				}
 				expectedAmount := float64(expectedTotalAmountCents) / 100.0 // конвертируем в float64 для ProcessPayment
 
-				mockPayment.On("ProcessPayment", ctx,
+				mockPayment.On("ProcessPayment", anyContext(),
 					mock.MatchedBy(func(orderID string) bool {
 						return len(orderID) > 0 && orderID[:6] == "order-" // проверяем, что ID заказа начинается с "order-"
 					}),
@@ -246,11 +251,10 @@ func TestOrderService_CreateOrder(t *testing.T) {
 			}
 
 			if tt.expectRepoSaveCalled {
-				mockRepo.On("Save", ctx, mock.MatchedBy(func(order repository.Order) bool {
+				mockRepo.On("SaveWithOutbox", anyContext(), mock.MatchedBy(func(order repository.Order) bool {
 					if tt.validateOrder != nil {
 						tt.validateOrder(t, order)
 					}
-					// Проверяем, что Items совпадают
 					if len(order.Items) != len(tt.input.Items) {
 						return false
 					}
@@ -262,9 +266,10 @@ func TestOrderService_CreateOrder(t *testing.T) {
 					}
 					return order.UserID == tt.input.UserID &&
 						order.Status == "paid"
-				})).Return(tt.repoError).Once()
+				}), mock.MatchedBy(func(s string) bool { return len(s) > 0 }), "order.payment.completed", mock.Anything, mock.Anything, "order.payment.completed").
+					Return(tt.repoError).Once()
 			} else {
-				mockRepo.AssertNotCalled(t, "Save")
+				mockRepo.AssertNotCalled(t, "SaveWithOutbox")
 			}
 
 			// Act
@@ -409,7 +414,7 @@ func TestOrderService_GetOrder(t *testing.T) {
 			mockRepo := repoMocks.NewOrderRepository(t)
 
 			logger := zap.NewNop()
-			service := NewOrderService(logger, mockInventory, mockPayment, mockRepo, "order.payment.completed")
+			service := NewOrderService(logger, mockInventory, mockPayment, mockRepo, "order.payment.completed", nil)
 
 			mockRepo.On("GetByID", ctx, tt.input.OrderID).
 				Return(tt.repoOrder, tt.repoError).Once()

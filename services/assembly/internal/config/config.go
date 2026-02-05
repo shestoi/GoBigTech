@@ -23,6 +23,11 @@ type Config struct {
 	AppEnv          Env
 	ShutdownTimeout time.Duration
 
+	// OpenTelemetry (OTEL_EXPORTER_OTLP_ENDPOINT=otel-collector:4317 в docker)
+	OTelEnabled       bool
+	OTelEndpoint      string
+	OTelSamplingRatio float64
+
 	// Kafka
 	KafkaBrokers           []string
 	PaymentCompletedTopic  string // входной топик (order.payment.completed)
@@ -84,6 +89,20 @@ func Load() (Config, error) {
 	cfg.AssemblyCompletedTopic = getString("KAFKA_ORDER_ASSEMBLY_COMPLETED_TOPIC", "order.assembly.completed")
 	cfg.DLQTopic = getString("KAFKA_ORDER_PAYMENT_COMPLETED_DLQ_TOPIC", "order.payment.completed.dlq")
 	cfg.ConsumerGroupID = getString("KAFKA_ASSEMBLY_CONSUMER_GROUP_ID", "assembly-service")
+
+	// OpenTelemetry
+	cfg.OTelEnabled = getString("OTEL_ENABLED", "0") == "1" || getString("OTEL_ENABLED", "") == "true"
+	if cfg.AppEnv == EnvLocal {
+		cfg.OTelEndpoint = getString("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317")
+	} else {
+		cfg.OTelEndpoint = getString("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+	}
+	samplingStr := getString("OTEL_SAMPLING_RATIO", "1.0")
+	if v, err := parseFloat(samplingStr, 1.0); err == nil && v >= 0 && v <= 1 {
+		cfg.OTelSamplingRatio = v
+	} else {
+		cfg.OTelSamplingRatio = 1.0
+	}
 
 	// Retry
 	retryMaxAttemptsStr := getString("KAFKA_RETRY_MAX_ATTEMPTS", "3")
@@ -167,6 +186,18 @@ func parseInt(s string, defaultValue int) (int, error) {
 	}
 	var result int
 	_, err := fmt.Sscanf(s, "%d", &result)
+	if err != nil {
+		return defaultValue, err
+	}
+	return result, nil
+}
+
+func parseFloat(s string, defaultValue float64) (float64, error) {
+	if s == "" {
+		return defaultValue, nil
+	}
+	var result float64
+	_, err := fmt.Sscanf(s, "%f", &result)
 	if err != nil {
 		return defaultValue, err
 	}
