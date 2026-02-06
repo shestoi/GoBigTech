@@ -44,9 +44,14 @@ func (a *IAMClientAdapter) ValidateSession(ctx context.Context, sessionID string
 	return resp.GetUserId(), nil
 }
 
-// NewIAMGRPCClient создаёт новый gRPC клиент для IAM Service
-func NewIAMGRPCClient(addr string, logger *zap.Logger) (iampb.IAMServiceClient, *grpc.ClientConn, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// NewIAMGRPCClient создаёт новый gRPC клиент для IAM Service.
+// clientInterceptor опционально — для tracing (observability.GRPCUnaryClientInterceptor).
+func NewIAMGRPCClient(addr string, logger *zap.Logger, clientInterceptor grpc.UnaryClientInterceptor) (iampb.IAMServiceClient, *grpc.ClientConn, error) {
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if clientInterceptor != nil {
+		opts = append(opts, grpc.WithChainUnaryInterceptor(clientInterceptor))
+	}
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, nil, err
 	}

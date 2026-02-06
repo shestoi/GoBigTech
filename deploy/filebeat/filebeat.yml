@@ -1,0 +1,21 @@
+filebeat.inputs: # filebeat.inputs - это входы для filebeat, которые используются для сбора данных
+  - type: container # type - это тип для входа для filebeat
+    paths: # paths - это пути для входа для filebeat
+      - /var/lib/docker/containers/*/*.log # /var/lib/docker/containers/*/*.log - это путь для входа для filebeat
+    processors: # processors - это процессоры для входа для filebeat
+      - add_docker_metadata: # add_docker_metadata - это процессор для добавления метаданных для входа для filebeat
+          host: "unix:///var/run/docker.sock" # host - это хост для входа для filebeat
+      - decode_json_fields: # decode_json_fields - это процессор для декодирования json данных для входа для filebeat
+          fields: ["message"] # fields - это поля для декодирования json данных для входа для filebeat
+          target: "" # target - это цель для декодирования json данных для входа для filebeat
+          when: # when - это условие для декодирования json данных для входа для filebeat
+            contains: # contains - это условие для проверки содержимого
+              message: "{" # message: "{" - это условие для проверки наличия json в сообщении
+
+output.elasticsearch: # output.elasticsearch - это выход для filebeat, который используется для сбора данных
+  hosts: ["elasticsearch:9200"]
+  index: "filebeat-%{+yyyy.MM.dd}" # index - это индекс для выхода для filebeat
+
+setup.ilm.enabled: false # setup.ilm.enabled - это флаг для включения ilm для filebeat
+setup.template.name: "filebeat" # setup.template.name - это имя для шаблона для filebeat
+setup.template.pattern: "filebeat-*" # setup.template.pattern - это шаблон для filebeat

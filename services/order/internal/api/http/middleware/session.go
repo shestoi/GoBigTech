@@ -14,7 +14,7 @@ func WithSessionID(next http.Handler) http.Handler {
 			http.Error(w, "session_id is required", http.StatusUnauthorized)
 			return
 		}
-		ctx := authctx.WithSessionID(r.Context(), sid)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		ctx := authctx.WithSessionID(r.Context(), sid) // добавляем session_id в контекст
+		next.ServeHTTP(w, r.WithContext(ctx)) // вызываем следующий handler
 	})
 }

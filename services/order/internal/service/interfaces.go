@@ -51,3 +51,8 @@ type OrderAssemblyCompletedEvent struct {
 	OrderID      string
 	UserID       string
 }
+
+// OrderMetricsRecorder записывает метрики заказов (опционально, может быть nil).
+type OrderMetricsRecorder interface {
+	RecordOrderCreated(revenueCents int64)
+}

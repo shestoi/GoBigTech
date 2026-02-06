@@ -33,6 +33,11 @@ type Config struct {
 	OrderConsumerGroupID             string        //consumer group ID для Order Service
 	AssemblyConsumerRetryMaxAttempts int           //максимальное количество попыток retry для assembly consumer
 	AssemblyConsumerRetryBackoffBase time.Duration //базовый интервал для backoff retry
+
+	// OpenTelemetry
+	OTelEnabled       bool
+	OTelEndpoint      string
+	OTelSamplingRatio float64
 }
 
 // Load загружает конфигурацию из переменных окружения
@@ -126,6 +131,15 @@ func Load() (Config, error) {
 	}
 	cfg.AssemblyConsumerRetryBackoffBase = retryBackoffBase
 
+	// OpenTelemetry
+	cfg.OTelEnabled = getBool("OTEL_ENABLED", false)
+	if cfg.AppEnv == EnvLocal {
+		cfg.OTelEndpoint = getString("OTEL_EXPORTER_OTLP_ENDPOINT", "127.0.0.1:4317")
+	} else {
+		cfg.OTelEndpoint = getString("OTEL_EXPORTER_OTLP_ENDPOINT", "otel-collector:4317")
+	}
+	cfg.OTelSamplingRatio = getFloat64("OTEL_SAMPLING_RATIO", 1.0)
+
 	// Валидация
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -169,6 +183,9 @@ func (c Config) Validate() error {
 	if c.AssemblyConsumerRetryBackoffBase <= 0 {
 		return fmt.Errorf("ORDER_KAFKA_RETRY_BACKOFF_BASE must be positive")
 	}
+	if c.OTelEnabled && (c.OTelSamplingRatio < 0 || c.OTelSamplingRatio > 1) {
+		return fmt.Errorf("OTEL_SAMPLING_RATIO must be in [0, 1]")
+	}
 	return nil
 }
 
@@ -187,6 +204,37 @@ func (c Config) Log() {
 	log.Printf("  KAFKA_ORDER_CONSUMER_GROUP_ID: %s", c.OrderConsumerGroupID)
 	log.Printf("  ORDER_KAFKA_RETRY_MAX_ATTEMPTS: %d", c.AssemblyConsumerRetryMaxAttempts)
 	log.Printf("  ORDER_KAFKA_RETRY_BACKOFF_BASE: %s", c.AssemblyConsumerRetryBackoffBase)
+	log.Printf("  OTEL_ENABLED: %v", c.OTelEnabled)
+	log.Printf("  OTEL_EXPORTER_OTLP_ENDPOINT: %s", c.OTelEndpoint)
+	log.Printf("  OTEL_SAMPLING_RATIO: %f", c.OTelSamplingRatio)
+}
+
+// getBool читает переменную окружения как bool (1, true, yes = true)
+func getBool(key string, defaultValue bool) bool {
+	s := os.Getenv(key)
+	if s == "" {
+		return defaultValue
+	}
+	switch s {
+	case "1", "true", "yes", "TRUE", "YES":
+		return true
+	case "0", "false", "no", "FALSE", "NO":
+		return false
+	}
+	return defaultValue
+}
+
+// getFloat64 парсит переменную окружения как float64
+func getFloat64(key string, defaultValue float64) float64 {
+	s := os.Getenv(key)
+	if s == "" {
+		return defaultValue
+	}
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err != nil {
+		return defaultValue
+	}
+	return f
 }
 
 // getString читает переменную окружения или возвращает дефолт

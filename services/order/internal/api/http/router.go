@@ -5,16 +5,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	platformhealth "github.com/shestoi/GoBigTech/platform/health/http"
+	platformobservability "github.com/shestoi/GoBigTech/platform/observability"
 
 	"github.com/shestoi/GoBigTech/services/order/internal/api/http/middleware"
+	"go.uber.org/zap"
 )
 
 // NewRouter создаёт и настраивает HTTP роутер для Order Service
-// Регистрирует все маршруты и возвращает готовый к использованию роутер
 // readiness - функция для проверки готовности сервиса (например, проверка БД).
 // Если readiness возвращает false, health endpoint вернёт 503 Service Unavailable.
-func NewRouter(handler *Handler, readiness func() bool) chi.Router {
+// logger используется для observability HTTP middleware (trace_id в логах).
+func NewRouter(handler *Handler, readiness func() bool, logger *zap.Logger) chi.Router {
 	router := chi.NewRouter()
+
+	// Observability: trace context + span на каждый запрос, logger с trace_id в контексте
+	if logger != nil {
+		router.Use(platformobservability.HTTPMiddleware("order", logger))
+	}
 
 	// /orders* требуют x-session-id (middleware возвращает 401 при отсутствии)
 	router.Route("/orders", func(r chi.Router) {

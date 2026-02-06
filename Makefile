@@ -1,6 +1,8 @@
 .PHONY: help test test-unit test-integration test-e2e build
 .PHONY: kafka-up kafka-down kafka-reset kafka-topics kafka-topics-list kafka-topics-create
 .PHONY: kafka-producer kafka-consumer kafka-consume-payment kafka-consume-assembly kafka-consume-dlq
+.PHONY: obs-up obs-down jaeger
+.PHONY: app-up app-down stack-up stack-down all-up all-down
 
 # ---- Help ----
 help:
@@ -26,6 +28,19 @@ help:
 	@echo ""
 	@echo "Service commands:"
 	@echo "  make notification-run       Run Notification service (APP_ENV=local)"
+	@echo ""
+	@echo "Observability commands:"
+	@echo "  make obs-up                 Start observability stack (otel-collector, jaeger, prometheus, alertmanager, grafana, elasticsearch, kibana, filebeat)"
+	@echo "  make obs-down               Stop observability stack"
+	@echo "  make jaeger                 Print Jaeger UI URL (see docs/OBSERVABILITY.md)"
+	@echo ""
+	@echo "Docker mode commands:"
+	@echo "  make app-up                 Start app services in docker (iam, inventory, payment, order, assembly, notification)"
+	@echo "  make app-down               Stop app services"
+	@echo "  make stack-up               Start infrastructure + observability (kafka + obs stack)"
+	@echo "  make stack-down             Stop infrastructure + observability"
+	@echo "  make all-up                 Start everything (stack + app services)"
+	@echo "  make all-down               Stop everything"
 	@echo ""
 
 # ---- Tests ----
@@ -128,3 +143,48 @@ iam-run:
 
 inventory-run:
 	cd services/inventory && APP_ENV=local go run ./cmd/inventory
+
+# ---- Observability stack ----
+OBS_SERVICES = otel-collector jaeger prometheus alertmanager grafana elasticsearch kibana filebeat
+
+obs-up:
+	docker compose up -d $(OBS_SERVICES)
+
+obs-down:
+	docker compose stop $(OBS_SERVICES)
+
+jaeger:
+	@echo "Jaeger UI: http://127.0.0.1:16686 (see docs/OBSERVABILITY.md)"
+
+# ---- Docker mode: app services ----
+app-up:
+	docker compose up -d iam inventory payment order assembly notification
+
+app-down:
+	docker compose stop iam inventory payment order assembly notification
+
+# ---- Docker mode: infrastructure + observability ----
+stack-up:
+	make kafka-up
+	make obs-up
+
+stack-down:
+	make obs-down
+	make kafka-down
+
+# ---- Docker mode: everything ----
+all-up:
+	make stack-up
+	make app-up
+
+all-down:
+	make app-down
+	make stack-down
+
+# Генерация заказов для проверки алерта >10 заказов/мин (нужны SESSION_ID и USER_ID)
+gen-orders:
+	@if [ -z "$$SESSION_ID" ] || [ -z "$$USER_ID" ]; then echo "Usage: SESSION_ID=xxx USER_ID=yyy make gen-orders"; exit 1; fi; \
+	for i in 1 2 3 4 5 6 7 8 9 10 11; do \
+	  curl -s -X POST http://127.0.0.1:8080/orders -H "Content-Type: application/json" -H "x-session-id: $$SESSION_ID" -d "{\"user_id\":\"$$USER_ID\",\"items\":[{\"product_id\":\"p$$i\",\"quantity\":1}]}" && echo " order $$i" || echo " order $$i failed"; \
+	  sleep 5; \
+	done

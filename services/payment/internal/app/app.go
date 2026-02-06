@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net"
 	"os"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	platformhealth "github.com/shestoi/GoBigTech/platform/health/grpc"
 	platformlogging "github.com/shestoi/GoBigTech/platform/logging"
+	platformobservability "github.com/shestoi/GoBigTech/platform/observability"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
 	grpcapi "github.com/shestoi/GoBigTech/services/payment/internal/api/grpc"
 	"github.com/shestoi/GoBigTech/services/payment/internal/config"
@@ -48,6 +50,19 @@ func Build(cfg config.Config) (*App, error) {
 	logger = logger.With(zap.String("op", op))
 	logger.Info("Building Payment service", zap.String("grpc_addr", cfg.GRPCAddr))
 
+	// OpenTelemetry
+	otelCfg := platformobservability.Config{
+		Enabled:               cfg.OTelEnabled,
+		OTLPEndpoint:          cfg.OTelEndpoint,
+		SamplingRatio:         cfg.OTelSamplingRatio,
+		ServiceName:           "payment",
+		DeploymentEnvironment: string(cfg.AppEnv),
+	}
+	otelShutdown, err := platformobservability.Init(context.Background(), otelCfg)
+	if err != nil {
+		return nil, err
+	}
+
 	// Создаём in-memory репозиторий
 	paymentRepo := memory.NewMemoryRepository()
 
@@ -63,8 +78,10 @@ func Build(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	// Создаем gRPC сервер
-	grpcServer := grpc.NewServer()
+	// gRPC сервер с tracing interceptor
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(platformobservability.GRPCUnaryServerInterceptor("payment")),
+	)
 
 	// Включаем reflection, если указано в конфиге
 	if cfg.EnableGRPCReflection {
@@ -86,13 +103,14 @@ func Build(cfg config.Config) (*App, error) {
 	shutdownMgr := platformshutdown.New(cfg.ShutdownTimeout, logger)
 
 	// Регистрируем shutdown функции в обратном порядке выполнения
+	shutdownMgr.Add("otel", otelShutdown)
 	shutdownMgr.Add("grpc_server", platformshutdown.ShutdownGRPCServer(grpcServer))
 	shutdownMgr.Add("health_readiness", platformshutdown.SetHealthNotServing(health))
 
 	return &App{
 		logger:      logger,
 		grpcServer:  grpcServer,
-		listener:   listener,
+		listener:    listener,
 		health:      health,
 		shutdownMgr: shutdownMgr,
 	}, nil
@@ -119,4 +137,3 @@ func (a *App) Run() error {
 	a.logger.Info("Payment service stopped")
 	return nil
 }
-

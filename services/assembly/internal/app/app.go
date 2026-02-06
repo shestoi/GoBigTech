@@ -6,9 +6,13 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	platformlogging "github.com/shestoi/GoBigTech/platform/logging"
+	platformobservability "github.com/shestoi/GoBigTech/platform/observability"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
 	"github.com/shestoi/GoBigTech/services/assembly/internal/config"
 	eventkafka "github.com/shestoi/GoBigTech/services/assembly/internal/event/kafka"
@@ -34,6 +38,19 @@ func Build(cfg config.Config) (*App, error) {
 		Level:       os.Getenv("LOG_LEVEL"),
 		Format:      os.Getenv("LOG_FORMAT"),
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// OpenTelemetry: traces + metrics (noop если OTEL_ENABLED=false)
+	otelCfg := platformobservability.Config{
+		Enabled:               cfg.OTelEnabled,
+		OTLPEndpoint:          cfg.OTelEndpoint,
+		SamplingRatio:         cfg.OTelSamplingRatio,
+		ServiceName:           "assembly",
+		DeploymentEnvironment: string(cfg.AppEnv),
+	}
+	otelShutdown, err := platformobservability.Init(context.Background(), otelCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -67,8 +84,14 @@ func Build(cfg config.Config) (*App, error) {
 		cfg.DLQTopic,
 	)
 
+	// Метрики сборки (assembly_duration_ms); при отключённом OTEL — noop
+	var assemblyMetrics service.AssemblyMetricsRecorder
+	if cfg.OTelEnabled {
+		assemblyMetrics = newAssemblyMetricsRecorder()
+	}
+
 	// Создаём service слой
-	assemblyService := service.NewService(logger, publisher, idempotencyStore, idempotencyTTL)
+	assemblyService := service.NewService(logger, publisher, idempotencyStore, idempotencyTTL, assemblyMetrics)
 
 	// Создаём Kafka consumer для событий оплаты
 	consumer := eventkafka.NewOrderPaidConsumer(
@@ -85,7 +108,8 @@ func Build(cfg config.Config) (*App, error) {
 	// Создаём shutdown manager
 	shutdownMgr := platformshutdown.New(cfg.ShutdownTimeout, logger)
 
-	// Регистрируем shutdown функции в обратном порядке выполнения
+	// Регистрируем shutdown: otel последним, чтобы успели записаться spans/metrics
+	shutdownMgr.Add("otel", otelShutdown)
 	shutdownMgr.Add("kafka_consumer", func(ctx context.Context) error {
 		return consumer.Close()
 	})
@@ -133,4 +157,22 @@ func (a *App) Run() error {
 
 	a.logger.Info("Assembly service stopped")
 	return nil
+}
+
+// assemblyMetricsRecorder записывает assembly_duration_ms в OTLP histogram.
+type assemblyMetricsRecorder struct {
+	histogram metric.Float64Histogram
+}
+
+func newAssemblyMetricsRecorder() *assemblyMetricsRecorder {
+	meter := otel.Meter("assembly")
+	hist, _ := meter.Float64Histogram("assembly_duration_ms", metric.WithDescription("Assembly duration in milliseconds"))
+	return &assemblyMetricsRecorder{histogram: hist}
+}
+
+func (r *assemblyMetricsRecorder) RecordAssemblyDuration(d time.Duration, result string) {
+	if r.histogram == nil {
+		return
+	}
+	r.histogram.Record(context.Background(), float64(d.Milliseconds()), metric.WithAttributes(attribute.String("result", result)))
 }

@@ -49,12 +49,12 @@ func (r *Repository) UpsertInboxPending(ctx context.Context, eventID, eventType 
 		return nil, err
 	}
 
-	res := &repository.InboxUpsertResult{}
-	switch status {
+	res := &repository.InboxUpsertResult{} //res - результат UpsertInboxPending
+	switch status { //status - статус события
 	case "sent":
-		res.AlreadyProcessed = true
+		res.AlreadyProcessed = true //если событие уже обработано, устанавливаем флаг AlreadyProcessed в true
 	case "pending":
-		res.CanProcess = true
+		res.CanProcess = true //если событие ещё не обработано, устанавливаем флаг CanProcess в true
 	}
 	return res, nil
 }

@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	hashFieldUserID     = "user_id"
-	hashFieldCreatedAt  = "created_at"
-	hashFieldLastSeenAt = "last_seen_at"
+	hashFieldUserID     = "user_id" // hash user_id - id пользователя
+	hashFieldCreatedAt  = "created_at" // hashFieldCreatedAt - поле created_at в hash
+	hashFieldLastSeenAt = "last_seen_at" // hashFieldLastSeenAt - поле last_seen_at в hash
 )
 
 // SessionRepository реализует SessionRepository используя Redis hash
@@ -42,10 +42,10 @@ func (r *SessionRepository) CreateSession(ctx context.Context, userID string, tt
 	key := sessionKey(sessionID)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	pipe := r.client.Pipeline()
-	pipe.HSet(ctx, key, hashFieldUserID, userID, hashFieldCreatedAt, now, hashFieldLastSeenAt, now)
-	pipe.Expire(ctx, key, ttl)
-	_, err := pipe.Exec(ctx)
+	pipe := r.client.Pipeline() //pipe для выполнения команд в Redis
+	pipe.HSet(ctx, key, hashFieldUserID, userID, hashFieldCreatedAt, now, hashFieldLastSeenAt, now) //HSet для установки значений в hash
+	pipe.Expire(ctx, key, ttl) //Expire для установки TTL для hash
+	_, err := pipe.Exec(ctx) //Exec для выполнения команд в Redis
 	if err != nil {
 		r.logger.Error("failed to create session hash in redis",
 			zap.Error(err),

@@ -1,0 +1,51 @@
+receivers: # receivers - это приемники для otel-collector, которые используются для сбора данных
+  otlp: 
+    protocols: 
+      grpc: 
+        endpoint: 0.0.0.0:4317 # 0.0.0.0:4317 - это адрес для приема данных через gRPC
+      http:
+        endpoint: 0.0.0.0:4318 # 0.0.0.0:4318 - это адрес для приема данных через HTTP
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+processors: # processors - это процессоры для otel-collector, которые используются для обработки данных
+  batch:
+    timeout: 1s # 1s - это время ожидания для отправки данных
+    send_batch_size: 1024 # 1024 - это размер пакета для отправки данных
+  memory_limiter:
+    check_interval: 1s # 1s - это время ожидания для проверки памяти
+    limit_mib: 512 # 512 - это размер памяти для ограничения памяти
+  resource:
+    attributes: # attributes - это атрибуты для ресурса
+      - key: deployment.environment # deployment.environment - это атрибут для окружения
+        value: docker # docker - это окружение
+        action: upsert # upsert - это действие для обновления данных
+
+exporters: # exporters - это экспортеры для otel-collector, которые используются для отправки данных
+  otlp: # otlp - это экспортер для otel-collector, который используется для отправки данных через gRPC
+    endpoint: jaeger:4317 # jaeger:4317 - это адрес для отправки данных через gRPC
+    tls: # tls - это флаг для включения TLS (криптографический протокол, обеспечивающий безопасную передачу данных между веб-серверами и браузерами (клиентами) в интернете.)
+      insecure: true # insecure - это флаг для отключения TLS
+  prometheus: # prometheus - это экспортер для otel-collector, который используется для отправки данных через HTTP
+    endpoint: "0.0.0.0:8889" # 0.0.0.0:8889 - это адрес для отправки данных через HTTP
+    namespace: otel # otel - это пространство имен для данных
+    resource_to_telemetry_conversion: # resource_to_telemetry_conversion - это преобразование ресурса в телеметрию
+      enabled: true # enabled - это флаг для включения преобразования ресурса в телеметрию
+  # debug exporter: add only for dev (ENABLE_DEBUG_EXPORTER=true); omit in prod to avoid noise
+
+service: # service - это сервис для otel-collector, который используется для отправки данных
+  extensions: [health_check]
+  pipelines: # pipelines - это пайплайны для otel-collector, которые используются для отправки данных
+    traces: # traces - это трейсы для otel-collector, которые используются для отправки данных
+      receivers: [otlp] # receivers - это приемники для пайплайна, которые используются для сбора данных
+      processors: [memory_limiter, batch, resource] # processors - это процессоры для пайплайна, которые используются для обработки данных
+      exporters: [otlp] # exporters - это экспортеры для пайплайна, которые используются для отправки данных
+    metrics: # metrics - это метрики для otel-collector, которые используются для отправки данных
+      receivers: [otlp] # receivers - это приемники для пайплайна, которые используются для сбора данных
+      processors: [memory_limiter, batch, resource] # processors - это процессоры для пайплайна, которые используются для обработки данных
+      exporters: [prometheus] # exporters - это экспортеры для пайплайна, которые используются для отправки данных  
+  telemetry: # telemetry - это телеметрия для otel-collector, который используется для отправки данных
+    logs: # logs - это логи для телеметрии, которые используются для отправки данных
+      level: info # level - это уровень для логирования

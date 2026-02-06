@@ -39,6 +39,12 @@ type Config struct {
 	TelegramChatID   string
 	TelegramEnabled  bool
 
+	// Alerts (Alertmanager webhook → Telegram)
+	AlertTelegramChatID string // ALERT_TELEGRAM_CHAT_ID — чат для алертов (ops)
+	HTTPAlertPort       string // порт HTTP сервера для приёма webhook (по умолчанию 8081)
+	AlertsHTTPAddr      string // ALERTS_HTTP_ADDR — полный адрес (например 0.0.0.0:8081), иначе ":8081"
+	TelegramDisable     bool   // TELEGRAM_DISABLE — не отправлять алерты в Telegram (для локальных тестов)
+
 	// Templates
 	TemplatesDir string
 
@@ -128,6 +134,12 @@ func Load() (Config, error) {
 	cfg.TelegramBotToken = getString("TELEGRAM_BOT_TOKEN", "8523796732:AAEkeA6oFQrQNBpl6DYekxK-wbn83bQL9Jg")
 	cfg.TelegramChatID = getString("TELEGRAM_CHAT_ID", "6721014060")
 
+	// Alerts webhook
+	cfg.AlertTelegramChatID = getString("ALERT_TELEGRAM_CHAT_ID", "")
+	cfg.HTTPAlertPort = getString("HTTP_ALERT_PORT", "8081")
+	cfg.AlertsHTTPAddr = getString("ALERTS_HTTP_ADDR", "") // если пусто — используем ":" + HTTPAlertPort
+	cfg.TelegramDisable = getString("TELEGRAM_DISABLE", "") == "true" || getString("TELEGRAM_DISABLE", "") == "1"
+
 	// Templates directory
 	cfg.TemplatesDir = getString("TEMPLATES_DIR", "./templates")
 
@@ -193,6 +205,7 @@ func (c Config) Validate() error {
 	if c.IAMGRPCAddr == "" {
 		return fmt.Errorf("IAM_GRPC_ADDR is required")
 	}
+	// ALERT_TELEGRAM_CHAT_ID не обязателен: если пустой, webhook отвечает 200 но не шлёт в Telegram
 	return nil
 }
 
@@ -217,6 +230,10 @@ func (c Config) Log() {
 	}
 	log.Printf("  TEMPLATES_DIR: %s", c.TemplatesDir)
 	log.Printf("  IAM_GRPC_ADDR: %s", c.IAMGRPCAddr)
+	log.Printf("  HTTP_ALERT_PORT: %s", c.HTTPAlertPort)
+	if c.AlertTelegramChatID != "" {
+		log.Printf("  ALERT_TELEGRAM_CHAT_ID: %s", c.AlertTelegramChatID)
+	}
 }
 
 // getString читает переменную окружения или возвращает дефолт

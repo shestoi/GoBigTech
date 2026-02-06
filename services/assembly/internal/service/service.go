@@ -11,34 +11,42 @@ import (
 // ErrEventIDRequired возвращается когда event_id отсутствует в событии
 var ErrEventIDRequired = errors.New("event_id is required")
 
+// AssemblyMetricsRecorder записывает метрики сборки (опционально, может быть nil).
+type AssemblyMetricsRecorder interface {
+	RecordAssemblyDuration(d time.Duration, result string)
+}
+
 // Service содержит бизнес-логику обработки событий оплаты заказа
 type Service struct {
 	logger         *zap.Logger
 	publisher      AssemblyEventPublisher
 	store          ProcessedEventsStore
 	sleeper        Sleeper
-	idempotencyTTL time.Duration // TTL для idempotency store
+	idempotencyTTL time.Duration
+	metrics        AssemblyMetricsRecorder
 }
 
-// NewService создаёт новый экземпляр Service
-func NewService(logger *zap.Logger, publisher AssemblyEventPublisher, store ProcessedEventsStore, idempotencyTTL time.Duration) *Service {
+// NewService создаёт новый экземпляр Service. metrics может быть nil.
+func NewService(logger *zap.Logger, publisher AssemblyEventPublisher, store ProcessedEventsStore, idempotencyTTL time.Duration, metrics AssemblyMetricsRecorder) *Service {
 	return &Service{
 		logger:         logger,
 		publisher:      publisher,
 		store:          store,
 		sleeper:        &DefaultSleeper{},
 		idempotencyTTL: idempotencyTTL,
+		metrics:        metrics,
 	}
 }
 
 // NewServiceWithSleeper создаёт новый экземпляр Service с кастомным sleeper (для тестов)
-func NewServiceWithSleeper(logger *zap.Logger, publisher AssemblyEventPublisher, store ProcessedEventsStore, sleeper Sleeper, idempotencyTTL time.Duration) *Service {
+func NewServiceWithSleeper(logger *zap.Logger, publisher AssemblyEventPublisher, store ProcessedEventsStore, sleeper Sleeper, idempotencyTTL time.Duration, metrics AssemblyMetricsRecorder) *Service {
 	return &Service{
 		logger:         logger,
 		publisher:      publisher,
 		store:          store,
 		sleeper:        sleeper,
 		idempotencyTTL: idempotencyTTL,
+		metrics:        metrics,
 	}
 }
 
@@ -76,13 +84,17 @@ func (s *Service) HandleOrderPaid(ctx context.Context, event OrderPaidEvent) err
 			zap.String("event_id", event.EventID),
 			zap.String("order_id", event.OrderID),
 		)
-		// Возвращаем nil - событие уже обработано, side-effect не выполняем
 		return nil
 	}
+
+	assemblyStart := time.Now()
 
 	// Имитация сборки заказа - ждём 10 секунд
 	s.logger.Info("assembling order", zap.String("order_id", event.OrderID))
 	if err := s.sleeper.Sleep(ctx, 10*time.Second); err != nil {
+		if s.metrics != nil {
+			s.metrics.RecordAssemblyDuration(time.Since(assemblyStart), "fail")
+		}
 		return err
 	}
 
@@ -104,24 +116,29 @@ func (s *Service) HandleOrderPaid(ctx context.Context, event OrderPaidEvent) err
 			zap.Error(err),
 			zap.String("order_id", event.OrderID),
 		)
+		if s.metrics != nil {
+			s.metrics.RecordAssemblyDuration(time.Since(assemblyStart), "fail")
+		}
 		return err
 	}
 
-	// После успешной публикации помечаем событие как обработанное
-	// Если MarkProcessed вернёт ошибку, это вызовет retry, но событие уже могло быть отправлено
-	// В production с durable store это не проблема, но сейчас это допустимо
 	if err := s.store.MarkProcessed(ctx, event.EventID, s.idempotencyTTL); err != nil {
 		s.logger.Error("failed to mark event as processed",
 			zap.Error(err),
 			zap.String("event_id", event.EventID),
 		)
+		if s.metrics != nil {
+			s.metrics.RecordAssemblyDuration(time.Since(assemblyStart), "fail")
+		}
 		return err
 	}
 
+	if s.metrics != nil {
+		s.metrics.RecordAssemblyDuration(time.Since(assemblyStart), "success")
+	}
 	s.logger.Info("order assembly event published successfully",
 		zap.String("event_id", event.EventID),
 		zap.String("order_id", event.OrderID),
 	)
-
 	return nil
 }

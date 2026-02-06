@@ -38,7 +38,7 @@ func TestService_HandleOrderPaid_Idempotency(t *testing.T) {
 	mockSleeper := &MockSleeper{}
 
 	// Создаём сервис с mock sleeper (чтобы не ждать 10 секунд)
-	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour)
+	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour, nil)
 
 	event := OrderPaidEvent{
 		EventID:       "evt-1",
@@ -104,7 +104,7 @@ func TestService_HandleOrderPaid_EventIDRequired(t *testing.T) {
 	mockStore := new(MockProcessedEventsStore)
 	mockSleeper := &MockSleeper{}
 
-	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour)
+	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour, nil)
 
 	event := OrderPaidEvent{
 		EventID:       "", // отсутствует event_id
@@ -132,7 +132,7 @@ func TestService_HandleOrderPaid_StoreError(t *testing.T) {
 	mockStore := new(MockProcessedEventsStore)
 	mockSleeper := &MockSleeper{}
 
-	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour)
+	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour, nil)
 
 	event := OrderPaidEvent{
 		EventID:       "evt-1",
@@ -163,7 +163,7 @@ func TestService_HandleOrderPaid_PublisherError(t *testing.T) {
 	mockStore := new(MockProcessedEventsStore)
 	mockSleeper := &MockSleeper{}
 
-	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour)
+	svc := NewServiceWithSleeper(logger, mockPublisher, mockStore, mockSleeper, 24*time.Hour, nil)
 
 	event := OrderPaidEvent{
 		EventID:       "evt-1",

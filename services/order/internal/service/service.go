@@ -7,30 +7,33 @@ import (
 	"log"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/shestoi/GoBigTech/services/order/internal/repository"
 )
 
 // OrderService содержит бизнес-логику работы с заказами
-// Теперь зависит от интерфейсов, а не от конкретных gRPC клиентов и репозиториев
 type OrderService struct {
 	logger                *zap.Logger
 	inventoryClient       InventoryClient
 	paymentClient         PaymentClient
 	orderRepo             repository.OrderRepository
 	paymentCompletedTopic string
+	metrics               OrderMetricsRecorder // опционально, может быть nil
 }
 
-// NewOrderService создаёт новый экземпляр OrderService
-// Принимает интерфейсы как зависимости - это позволяет легко подменять их в тестах
-// и делает service независимым от конкретной реализации (gRPC, HTTP, моки, БД)
+// NewOrderService создаёт новый экземпляр OrderService.
+// metrics может быть nil — тогда метрики не записываются.
 func NewOrderService(
 	logger *zap.Logger,
 	inventoryClient InventoryClient,
 	paymentClient PaymentClient,
 	orderRepo repository.OrderRepository,
 	topic string,
+	metrics OrderMetricsRecorder,
 ) *OrderService {
 	return &OrderService{
 		logger:                logger,
@@ -38,6 +41,7 @@ func NewOrderService(
 		paymentClient:         paymentClient,
 		orderRepo:             orderRepo,
 		paymentCompletedTopic: topic,
+		metrics:               metrics,
 	}
 }
 
@@ -60,22 +64,33 @@ type CreateOrderOutput struct {
 // CreateOrder создаёт новый заказ
 // Вся бизнес-логика здесь: резервирование товара, оплата, формирование заказа
 func (s *OrderService) CreateOrder(ctx context.Context, input CreateOrderInput) (*CreateOrderOutput, error) {
+	tracer := otel.Tracer("order")
+	ctx, span := tracer.Start(ctx, "CreateOrder", trace.WithSpanKind(trace.SpanKindInternal))
+	defer span.End()
+
 	log.Printf("Creating order for user %s with %d items", input.UserID, len(input.Items))
 
 	// Валидация: должен быть хотя бы один товар
 	if len(input.Items) == 0 {
-		return nil, fmt.Errorf("order must contain at least one item")
+		err := fmt.Errorf("order must contain at least one item")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 
 	// 1. Резервируем товары через Inventory сервис
-	// Для каждого товара вызываем ReserveStock
+	ctx, reserveSpan := tracer.Start(ctx, "Inventory.ReserveStock", trace.WithSpanKind(trace.SpanKindClient))
 	for _, item := range input.Items {
 		err := s.inventoryClient.ReserveStock(ctx, item.ProductID, item.Quantity)
 		if err != nil {
 			log.Printf("Inventory ReserveStock error for product %s: %v", item.ProductID, err)
+			reserveSpan.RecordError(err)
+			reserveSpan.SetStatus(codes.Error, err.Error())
+			reserveSpan.End()
 			return nil, fmt.Errorf("inventory service error for product %s: %w", item.ProductID, err)
 		}
 	}
+	reserveSpan.End()
 
 	log.Printf("All inventory items reserved successfully")
 
@@ -93,13 +108,20 @@ func (s *OrderService) CreateOrder(ctx context.Context, input CreateOrderInput) 
 	}
 
 	// 4. Обрабатываем оплату через Payment сервис
+	ctx, paymentSpan := tracer.Start(ctx, "Payment.Charge", trace.WithSpanKind(trace.SpanKindClient))
 	paymentMethod := "card" // можно передавать из input в будущем
 	amountFloat := float64(totalAmount) / 100.0
 	transactionID, err := s.paymentClient.ProcessPayment(ctx, orderID, input.UserID, amountFloat, paymentMethod)
 	if err != nil {
+		paymentSpan.RecordError(err)
+		paymentSpan.SetStatus(codes.Error, err.Error())
+		paymentSpan.End()
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		log.Printf("Payment ProcessPayment error: %v", err)
 		return nil, fmt.Errorf("payment service error: %w", err)
 	}
+	paymentSpan.End()
 
 	log.Printf("Payment processed successfully, transaction ID: %s", transactionID)
 
@@ -135,13 +157,18 @@ func (s *OrderService) CreateOrder(ctx context.Context, input CreateOrderInput) 
 	// 7. Сохраняем заказ и событие в outbox в одной транзакции
 	topic := s.paymentCompletedTopic
 	if err := s.orderRepo.SaveWithOutbox(ctx, order, eventID, eventType, occurredAt, payloadBytes, topic); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		log.Printf("Failed to save order with outbox: %v", err)
 		return nil, fmt.Errorf("failed to save order with outbox: %w", err)
 	}
 
+	if s.metrics != nil {
+		s.metrics.RecordOrderCreated(totalAmount)
+	}
+
 	log.Printf("Order saved successfully with outbox event: %s", orderID)
 
-	// 5. Формируем результат
 	return &CreateOrderOutput{
 		OrderID: orderID,
 		UserID:  input.UserID,

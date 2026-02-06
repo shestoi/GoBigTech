@@ -8,11 +8,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	platformlogging "github.com/shestoi/GoBigTech/platform/logging"
+	platformobservability "github.com/shestoi/GoBigTech/platform/observability"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
 	inventorypb "github.com/shestoi/GoBigTech/services/inventory/v1"
 	httpapi "github.com/shestoi/GoBigTech/services/order/internal/api/http"
@@ -53,9 +57,25 @@ func Build(cfg config.Config) (*App, error) {
 	logger = logger.With(zap.String("op", op))
 	logger.Info("Building Order service", zap.String("http_addr", cfg.HTTPAddr))
 
+	// OpenTelemetry: traces + propagator (noop если OTEL_ENABLED=false)
+	otelCfg := platformobservability.Config{
+		Enabled:               cfg.OTelEnabled,
+		OTLPEndpoint:          cfg.OTelEndpoint,
+		SamplingRatio:         cfg.OTelSamplingRatio,
+		ServiceName:           "order",
+		DeploymentEnvironment: string(cfg.AppEnv),
+	}
+	otelShutdown, err := platformobservability.Init(context.Background(), otelCfg)
+	if err != nil {
+		return nil, err
+	}
+
 	// Подключаемся к Inventory сервису
 	logger.Info("Connecting to Inventory service", zap.String("addr", cfg.InventoryGRPCAddr))
-	inventoryConn, err := grpc.NewClient(cfg.InventoryGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	inventoryConn, err := grpc.NewClient(cfg.InventoryGRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(platformobservability.GRPCUnaryClientInterceptor("order")),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +84,10 @@ func Build(cfg config.Config) (*App, error) {
 
 	// Подключаемся к Payment сервису
 	logger.Info("Connecting to Payment service", zap.String("addr", cfg.PaymentGRPCAddr))
-	paymentConn, err := grpc.NewClient(cfg.PaymentGRPCAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	paymentConn, err := grpc.NewClient(cfg.PaymentGRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(platformobservability.GRPCUnaryClientInterceptor("order")),
+	)
 	if err != nil {
 		inventoryConn.Close()
 		return nil, err
@@ -111,8 +134,12 @@ func Build(cfg config.Config) (*App, error) {
 	// Создаём PostgreSQL репозиторий
 	orderRepo := postgres.NewRepository(pool)
 
-	// Создаем service слой с зависимостями (без publisher, используем outbox)
-	orderService := service.NewOrderService(logger, inventoryClientAdapter, paymentClientAdapter, orderRepo, cfg.PaymentCompletedTopic)
+	// Метрики заказов (orders_created_total, order_revenue_total)
+	var orderMetrics service.OrderMetricsRecorder
+	if cfg.OTelEnabled {
+		orderMetrics = newOrderMetricsRecorder()
+	}
+	orderService := service.NewOrderService(logger, inventoryClientAdapter, paymentClientAdapter, orderRepo, cfg.PaymentCompletedTopic, orderMetrics)
 
 	// Создаём outbox dispatcher для публикации событий из outbox таблицы
 	var outboxDispatcher *eventkafka.OutboxDispatcher
@@ -158,8 +185,8 @@ func Build(cfg config.Config) (*App, error) {
 	// Создаем HTTP handler
 	handler := httpapi.NewHandler(orderService, logger)
 
-	// Настраиваем роутер
-	router := httpapi.NewRouter(handler, readiness)
+	// Настраиваем роутер (observability HTTP middleware добавляет trace_id в контекст и лог)
+	router := httpapi.NewRouter(handler, readiness, logger)
 
 	// Создаём HTTP сервер
 	httpServer := &http.Server{
@@ -174,6 +201,7 @@ func Build(cfg config.Config) (*App, error) {
 	shutdownMgr := platformshutdown.New(cfg.ShutdownTimeout, logger)
 
 	// Регистрируем shutdown функции в обратном порядке выполнения
+	shutdownMgr.Add("otel", otelShutdown)
 	if assemblyConsumer != nil {
 		shutdownMgr.Add("kafka_assembly_consumer", func(ctx context.Context) error {
 			return assemblyConsumer.Close()
@@ -263,4 +291,22 @@ func (a *App) Run() error {
 
 	a.logger.Info("Order service stopped")
 	return nil
+}
+
+// orderMetricsRecorder реализует service.OrderMetricsRecorder через OpenTelemetry Meter.
+type orderMetricsRecorder struct {
+	ordersCreated metric.Int64Counter
+	orderRevenue  metric.Int64Counter
+}
+
+func newOrderMetricsRecorder() *orderMetricsRecorder {
+	meter := otel.Meter("order")
+	ordersCreated, _ := meter.Int64Counter("orders_created_total", metric.WithDescription("Total orders created"))
+	orderRevenue, _ := meter.Int64Counter("order_revenue_total", metric.WithDescription("Total order revenue in cents"))
+	return &orderMetricsRecorder{ordersCreated: ordersCreated, orderRevenue: orderRevenue}
+}
+
+func (r *orderMetricsRecorder) RecordOrderCreated(revenueCents int64) {
+	r.ordersCreated.Add(context.Background(), 1, metric.WithAttributes(attribute.String("status", "success")))
+	r.orderRevenue.Add(context.Background(), revenueCents, metric.WithAttributes(attribute.String("status", "success")))
 }
