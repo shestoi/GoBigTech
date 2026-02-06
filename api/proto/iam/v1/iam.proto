@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package iam.v1;
+
+option go_package = "github.com/shestoi/GoBigTech/services/iam/v1;iampb";
+
+service IAMService {
+  // Register создаёт нового пользователя
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  
+  // Login аутентифицирует пользователя
+  rpc Login(LoginRequest) returns (LoginResponse);
+  
+  // GetUser получает информацию о пользователе по user_id
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  
+  // GetUserContact получает контактную информацию пользователя
+  rpc GetUserContact(GetUserContactRequest) returns (GetUserContactResponse);
+  
+  // ValidateSession проверяет валидность сессии и возвращает user_id
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+}
+
+message RegisterRequest {
+  string login = 1;
+  string password = 2;
+  optional string telegram_id = 3;
+}
+
+message RegisterResponse {
+  string user_id = 1;
+}
+
+message LoginRequest {
+  string login = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string user_id = 1;
+  string session_id = 2;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  string user_id = 1;
+  string login = 2;
+  optional string telegram_id = 3;
+}
+
+message GetUserContactRequest {
+  string user_id = 1;
+}
+
+message GetUserContactResponse {
+  optional string telegram_id = 1;
+  string preferred_channel = 2; // на будущее, пока всегда "telegram"
+}
+
+message ValidateSessionRequest {
+  string session_id = 1;
+}
+
+message ValidateSessionResponse {
+  string user_id = 1;
+}

@@ -28,4 +28,3 @@ func main() {
 		log.Fatalf("Service error: %v", err)
 	}
 }
-

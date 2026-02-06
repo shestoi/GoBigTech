@@ -20,12 +20,13 @@ const (
 
 // Config содержит конфигурацию Inventory Service
 type Config struct {
-	AppEnv              Env
-	GRPCAddr            string
-	MongoURI            string
-	MongoDBName         string
+	AppEnv               Env
+	GRPCAddr             string
+	MongoURI             string
+	MongoDBName          string
+	IAMGRPCAddr          string // адрес IAM Service для проверки сессий
 	EnableGRPCReflection bool
-	ShutdownTimeout     time.Duration
+	ShutdownTimeout      time.Duration
 }
 
 // Load загружает конфигурацию из переменных окружения
@@ -58,6 +59,13 @@ func Load() (Config, error) {
 	// INVENTORY_MONGO_DB
 	cfg.MongoDBName = getString("INVENTORY_MONGO_DB", "inventory")
 
+	// IAM_GRPC_ADDR
+	if cfg.AppEnv == EnvLocal {
+		cfg.IAMGRPCAddr = getString("IAM_GRPC_ADDR", "127.0.0.1:50053")
+	} else {
+		cfg.IAMGRPCAddr = getString("IAM_GRPC_ADDR", "iam:50053")
+	}
+
 	// ENABLE_GRPC_REFLECTION
 	cfg.EnableGRPCReflection = getBool("ENABLE_GRPC_REFLECTION", false)
 
@@ -88,6 +96,9 @@ func (c Config) Validate() error {
 	if c.MongoDBName == "" {
 		return fmt.Errorf("INVENTORY_MONGO_DB is required")
 	}
+	if c.IAMGRPCAddr == "" {
+		return fmt.Errorf("IAM_GRPC_ADDR is required")
+	}
 	if c.ShutdownTimeout <= 0 {
 		return fmt.Errorf("SHUTDOWN_TIMEOUT must be positive")
 	}
@@ -101,6 +112,7 @@ func (c Config) Log() {
 	log.Printf("  GRPC_ADDR: %s", c.GRPCAddr)
 	log.Printf("  INVENTORY_MONGO_URI: %s", maskMongoURI(c.MongoURI))
 	log.Printf("  INVENTORY_MONGO_DB: %s", c.MongoDBName)
+	log.Printf("  IAM_GRPC_ADDR: %s", c.IAMGRPCAddr)
 	log.Printf("  ENABLE_GRPC_REFLECTION: %v", c.EnableGRPCReflection)
 	log.Printf("  SHUTDOWN_TIMEOUT: %s", c.ShutdownTimeout)
 }
@@ -145,4 +157,3 @@ func maskMongoURI(uri string) string {
 	}
 	return masked
 }
-

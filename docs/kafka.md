@@ -469,4 +469,3 @@ docker exec -it gobigtech-kafka /opt/kafka/bin/kafka-console-consumer.sh \
   --topic order.notification.dlq \
   --from-beginning
 ```
-
