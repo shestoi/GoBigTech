@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	platformobservability "github.com/shestoi/GoBigTech/platform/observability"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
 	grpcapi "github.com/shestoi/GoBigTech/services/iam/internal/api/grpc"
+	httpapi "github.com/shestoi/GoBigTech/services/iam/internal/api/http"
 	"github.com/shestoi/GoBigTech/services/iam/internal/config"
 	"github.com/shestoi/GoBigTech/services/iam/internal/repository/postgres"
 	redisrepo "github.com/shestoi/GoBigTech/services/iam/internal/repository/redis"
@@ -33,6 +35,7 @@ import (
 type App struct {
 	logger      *zap.Logger
 	grpcServer  *grpc.Server
+	httpServer  *http.Server
 	listener    net.Listener
 	health      *platformhealth.Health
 	shutdownMgr *platformshutdown.Manager
@@ -170,11 +173,23 @@ func Build(cfg config.Config) (*App, error) {
 
 	logger.Info("IAM gRPC server configured", zap.String("addr", cfg.GRPCAddr))
 
+	// Внутренний HTTP-сервер для Envoy: POST /internal/validate (проверка сессии по x-session-id)
+	validateHandler := httpapi.NewValidateHandler(iamService, logger)
+	httpMux := http.NewServeMux()
+	httpMux.Handle("POST /internal/validate", validateHandler)
+	httpServer := &http.Server{
+		Addr:              cfg.HTTPInternalAddr,
+		Handler:           httpMux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	logger.Info("IAM HTTP internal server configured", zap.String("addr", cfg.HTTPInternalAddr))
+
 	// Создаём shutdown manager
 	shutdownMgr := platformshutdown.New(cfg.ShutdownTimeout, logger)
 
 	// Регистрируем shutdown функции в обратном порядке выполнения
 	shutdownMgr.Add("otel", otelShutdown)
+	shutdownMgr.Add("http_server", platformshutdown.ShutdownHTTPServer(httpServer))
 	shutdownMgr.Add("grpc_server", platformshutdown.ShutdownGRPCServer(grpcServer))
 	shutdownMgr.Add("health_readiness", platformshutdown.SetHealthNotServing(health))
 	shutdownMgr.Add("redis_client", func(ctx context.Context) error {
@@ -185,6 +200,7 @@ func Build(cfg config.Config) (*App, error) {
 	return &App{
 		logger:      logger,
 		grpcServer:  grpcServer,
+		httpServer:  httpServer,
 		listener:    listener,
 		health:      health,
 		shutdownMgr: shutdownMgr,
@@ -200,8 +216,16 @@ func (a *App) Run() error {
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
-		if err := a.grpcServer.Serve(a.listener); err != nil {
+		if err := a.grpcServer.Serve(a.listener); err != nil && err != grpc.ErrServerStopped {
 			a.logger.Error("gRPC server error", zap.Error(err))
+		}
+	}()
+
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			a.logger.Error("HTTP server error", zap.Error(err))
 		}
 	}()
 

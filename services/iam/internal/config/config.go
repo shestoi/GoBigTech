@@ -21,6 +21,7 @@ const (
 type Config struct {
 	AppEnv               Env
 	GRPCAddr             string
+	HTTPInternalAddr     string // внутренний HTTP (например 0.0.0.0:8082) для /internal/validate
 	PostgresDSN          string
 	RedisAddr            string        // для будущего использования
 	RedisPassword        string        // для будущего использования
@@ -52,6 +53,13 @@ func Load() (Config, error) {
 		cfg.GRPCAddr = getString("GRPC_ADDR", "127.0.0.1:50053")
 	} else {
 		cfg.GRPCAddr = getString("GRPC_ADDR", "0.0.0.0:50053")
+	}
+
+	// HTTP_INTERNAL_ADDR — внутренний HTTP-сервер для Envoy (POST /internal/validate)
+	if cfg.AppEnv == EnvLocal {
+		cfg.HTTPInternalAddr = getString("HTTP_INTERNAL_ADDR", "127.0.0.1:8082")
+	} else {
+		cfg.HTTPInternalAddr = getString("HTTP_INTERNAL_ADDR", "0.0.0.0:8082")
 	}
 
 	// IAM_POSTGRES_DSN
@@ -109,6 +117,9 @@ func Load() (Config, error) {
 func (c Config) Validate() error {
 	if c.GRPCAddr == "" {
 		return fmt.Errorf("GRPC_ADDR is required")
+	}
+	if c.HTTPInternalAddr == "" {
+		return fmt.Errorf("HTTP_INTERNAL_ADDR is required")
 	}
 	if c.PostgresDSN == "" {
 		return fmt.Errorf("IAM_POSTGRES_DSN is required")

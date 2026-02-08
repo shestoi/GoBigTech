@@ -1,0 +1,135 @@
+# Envoy — единая точка входа (gateway).
+# Маршрутизация HTTP без IAM-check.
+# Admin: 0.0.0.0:9901 (внутри контейнера, наружу не публикуем).
+
+admin: # admin - это админ для envoy, который используется для управления envoy
+  address:
+    socket_address:
+      address: 0.0.0.0 # address - это адрес для админа
+      port_value: 9901 # port_value - это порт для админа
+
+static_resources: # static_resources - это статические ресурсы для envoy
+  listeners:
+    - name: listener_http
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        - filters: # filters - это фильтры для envoy
+            - name: envoy.filters.network.http_connection_manager 
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/health"
+                          route:
+                            cluster: order_http
+                        - match:
+                            prefix: "/iam.v1.IAMService/"
+                          route:
+                            cluster: iam_grpc
+                            timeout: 0s
+                        - match:
+                            prefix: "/orders"
+                          route:
+                            cluster: order_http
+                http_filters:
+                  - name: envoy.filters.http.grpc_json_transcoder
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_json_transcoder.v3.GrpcJsonTranscoder
+                      proto_descriptor: "/etc/envoy/descriptor.pb"
+                      services: ["iam.v1.IAMService"]
+                      auto_mapping: true
+                      convert_grpc_status: true
+                      print_options:
+                        add_whitespace: true
+                      ignore_unknown_query_parameters: true
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          function envoy_on_request(request_handle)
+                            local path = request_handle:headers():get(":path")
+                            if path and string.sub(path, 1, 7) == "/health" then
+                              return
+                            end
+                            if path and (path == "/iam.v1.IAMService/Login" or string.sub(path, 1, 24) == "/iam.v1.IAMService/Login") then
+                              return
+                            end
+                            if path and (path == "/iam.v1.IAMService/Register" or string.sub(path, 1, 27) == "/iam.v1.IAMService/Register") then
+                              return
+                            end
+                            local session_id = request_handle:headers():get("x-session-id")
+                            if not session_id or session_id == "" then
+                              request_handle:respond({[":status"] = "401"}, "Unauthorized")
+                              return
+                            end
+                            local headers, body = request_handle:httpCall(
+                              "iam_http",
+                              {
+                                [":method"] = "POST",
+                                [":path"] = "/internal/validate",
+                                [":authority"] = "iam",
+                                ["x-session-id"] = session_id
+                              },
+                              "",
+                              2000
+                            )
+                            if not headers or headers[":status"] ~= "200" then
+                              request_handle:respond({[":status"] = "401"}, "Unauthorized")
+                              return
+                            end
+                          end
+                  - name: envoy.filters.http.router # router - это фильтр для маршрутизации запросов  
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: iam_grpc
+      type: STRICT_DNS
+      connect_timeout: 2s
+      lb_policy: ROUND_ROBIN
+      http2_protocol_options: {}
+      load_assignment:
+        cluster_name: iam_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: iam
+                      port_value: 50053
+    - name: iam_http
+      type: STRICT_DNS
+      connect_timeout: 2s
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: iam_http
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: iam
+                      port_value: 8082
+    - name: order_http
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: order_http
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: order
+                      port_value: 8080
