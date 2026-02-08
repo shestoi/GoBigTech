@@ -27,7 +27,7 @@ func TestOrderService_HandleOrderAssemblyCompleted(t *testing.T) {
 
 	t.Run("inserted=true, rowsAffected=1 -> ok", func(t *testing.T) {
 		mockRepo := mocks.NewOrderRepository(t)
-		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed")
+		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed", nil)
 
 		mockRepo.On("HandleAssemblyCompletedTx", ctx, "evt-1", "order.assembly.completed", event.OccurredAt, "order-123").
 			Return(true, int64(1), nil).Once()
@@ -40,7 +40,7 @@ func TestOrderService_HandleOrderAssemblyCompleted(t *testing.T) {
 
 	t.Run("inserted=false (duplicate) -> ok, update not required", func(t *testing.T) {
 		mockRepo := mocks.NewOrderRepository(t)
-		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed")
+		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed", nil)
 
 		mockRepo.On("HandleAssemblyCompletedTx", ctx, "evt-1", "order.assembly.completed", event.OccurredAt, "order-123").
 			Return(false, int64(0), nil).Once()
@@ -53,7 +53,7 @@ func TestOrderService_HandleOrderAssemblyCompleted(t *testing.T) {
 
 	t.Run("inserted=true, rowsAffected=0 -> ok + warn", func(t *testing.T) {
 		mockRepo := mocks.NewOrderRepository(t)
-		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed")
+		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed", nil)
 
 		mockRepo.On("HandleAssemblyCompletedTx", ctx, "evt-1", "order.assembly.completed", event.OccurredAt, "order-123").
 			Return(true, int64(0), nil).Once()
@@ -66,7 +66,7 @@ func TestOrderService_HandleOrderAssemblyCompleted(t *testing.T) {
 
 	t.Run("repo error -> error", func(t *testing.T) {
 		mockRepo := mocks.NewOrderRepository(t)
-		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed")
+		svc := NewOrderService(logger, nil, nil, mockRepo, "order.payment.completed", nil)
 
 		repoErr := errors.New("repository error")
 		mockRepo.On("HandleAssemblyCompletedTx", ctx, "evt-1", "order.assembly.completed", event.OccurredAt, "order-123").

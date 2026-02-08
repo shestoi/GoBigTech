@@ -28,18 +28,18 @@ func NewInventoryClientAdapter(client inventorypb.InventoryServiceClient) servic
 // ReserveStock реализует service.InventoryClient интерфейс
 // Прокидывает x-session-id из context в gRPC metadata для Inventory interceptor
 func (a *InventoryClientAdapter) ReserveStock(ctx context.Context, productID string, quantity int32) error {
-	sid, ok := authctx.SessionIDFromContext(ctx)
+	sid, ok := authctx.SessionIDFromContext(ctx) // извлекаем session_id из контекста
 	if !ok || sid == "" {
 		return status.Error(codes.Unauthenticated, "session_id is required")
 	}
-	ctx = metadata.AppendToOutgoingContext(ctx, "x-session-id", sid)
+	ctx = metadata.AppendToOutgoingContext(ctx, "x-session-id", sid) // добавляем session_id в metadata
 
-	req := &inventorypb.ReserveStockRequest{
-		ProductId: productID,
-		Quantity:  quantity,
+	req := &inventorypb.ReserveStockRequest{ // создаём запрос на резервирование товара
+		ProductId: productID, // id товара
+		Quantity:  quantity, // количество товара
 	}
 
-	resp, err := a.client.ReserveStock(ctx, req)
+	resp, err := a.client.ReserveStock(ctx, req) // вызываем gRPC метод на резервирование товара
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,12 @@
+groups:
+  - name: order_alerts
+    interval: 30s
+    rules:
+      - alert: HighOrderRate
+        expr: increase(otel_orders_created_total{exported_job="order",status="success"}[1m]) > 10
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High order rate (>10 orders in 1 minute)"
+          description: "Order rate in the last minute is {{ $value }} (threshold 10)."

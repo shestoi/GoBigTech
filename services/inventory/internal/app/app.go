@@ -13,6 +13,7 @@ import (
 
 	platformhealth "github.com/shestoi/GoBigTech/platform/health/grpc"
 	platformlogging "github.com/shestoi/GoBigTech/platform/logging"
+	platformobservability "github.com/shestoi/GoBigTech/platform/observability"
 	platformshutdown "github.com/shestoi/GoBigTech/platform/shutdown"
 	grpcapi "github.com/shestoi/GoBigTech/services/inventory/internal/api/grpc"
 	iamclient "github.com/shestoi/GoBigTech/services/inventory/internal/client/grpc"
@@ -54,6 +55,19 @@ func Build(cfg config.Config) (*App, error) {
 	logger = logger.With(zap.String("op", op))
 	logger.Info("Building Inventory service", zap.String("grpc_addr", cfg.GRPCAddr))
 
+	// OpenTelemetry
+	otelCfg := platformobservability.Config{
+		Enabled:               cfg.OTelEnabled,
+		OTLPEndpoint:          cfg.OTelEndpoint,
+		SamplingRatio:         cfg.OTelSamplingRatio,
+		ServiceName:           "inventory",
+		DeploymentEnvironment: string(cfg.AppEnv),
+	}
+	otelShutdown, err := platformobservability.Init(context.Background(), otelCfg)
+	if err != nil {
+		return nil, err
+	}
+
 	// Создаём health check с начальным статусом NOT_SERVING
 	health := platformhealth.New(grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 
@@ -86,7 +100,7 @@ func Build(cfg config.Config) (*App, error) {
 
 	// Подключаемся к IAM Service для проверки сессий
 	logger.Info("Connecting to IAM service", zap.String("addr", cfg.IAMGRPCAddr))
-	iamClient, iamConn, err := iamclient.NewIAMGRPCClient(cfg.IAMGRPCAddr, logger)
+	iamClient, iamConn, err := iamclient.NewIAMGRPCClient(cfg.IAMGRPCAddr, logger, platformobservability.GRPCUnaryClientInterceptor("inventory"))
 	if err != nil {
 		client.Disconnect(ctx)
 		return nil, err
@@ -109,9 +123,12 @@ func Build(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	// Создаем gRPC сервер с auth interceptor
+	// gRPC сервер: tracing (extract + span), затем auth
 	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(authInterceptor.Unary()),
+		grpc.ChainUnaryInterceptor(
+			platformobservability.GRPCUnaryServerInterceptor("inventory"),
+			authInterceptor.Unary(),
+		),
 	)
 
 	// Включаем reflection, если указано в конфиге
@@ -133,6 +150,7 @@ func Build(cfg config.Config) (*App, error) {
 	shutdownMgr := platformshutdown.New(cfg.ShutdownTimeout, logger)
 
 	// Регистрируем shutdown функции в обратном порядке выполнения
+	shutdownMgr.Add("otel", otelShutdown)
 	shutdownMgr.Add("mongodb", platformshutdown.DisconnectMongo(client))
 	shutdownMgr.Add("iam_conn", func(ctx context.Context) error {
 		iamConn.Close()
