@@ -1,4 +1,4 @@
-.PHONY: help test test-unit test-integration test-e2e build
+.PHONY: help test test-unit test-integration test-e2e build envoy-descriptor
 .PHONY: kafka-up kafka-down kafka-reset kafka-topics kafka-topics-list kafka-topics-create
 .PHONY: kafka-producer kafka-consumer kafka-consume-payment kafka-consume-assembly kafka-consume-dlq
 .PHONY: obs-up obs-down jaeger
@@ -13,6 +13,7 @@ help:
 	@echo "  make test-integration Run integration tests (Postgres)"
 	@echo "  make test-e2e         Run e2e tests (Mongo + gRPC)"
 	@echo "  make build            Build all services"
+	@echo "  make envoy-descriptor Regenerate deploy/envoy/descriptor.pb for grpc_json_transcoder"
 	@echo ""
 	@echo "Kafka commands:"
 	@echo "  make kafka-up              Start Kafka (docker compose up -d)"
@@ -54,6 +55,13 @@ test-integration:
 
 test-e2e:
 	go test -tags=e2e ./... -v -timeout 5m
+
+# ---- Envoy: descriptor for grpc_json_transcoder ----
+envoy-descriptor:
+	protoc -I ./api/proto --include_imports --include_source_info \
+	  --descriptor_set_out=./deploy/envoy/descriptor.pb \
+	  ./api/proto/iam/v1/iam.proto
+	@echo "deploy/envoy/descriptor.pb updated"
 
 # ---- Build ----
 build:

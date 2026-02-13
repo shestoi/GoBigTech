@@ -234,8 +234,9 @@ services:
       REDIS_ADDR: redis:6379
     networks:
       - gobigtech-network
-    ports:
-      - "50053:50053"
+    expose:
+      - "50053"
+      - "8082"
 
   inventory:
     build:
@@ -259,8 +260,8 @@ services:
       IAM_GRPC_ADDR: iam:50053
     networks:
       - gobigtech-network
-    ports:
-      - "50051:50051"
+    expose:
+      - "50051"
 
   payment:
     build:
@@ -278,8 +279,8 @@ services:
       OTEL_SAMPLING_RATIO: "1.0"
     networks:
       - gobigtech-network
-    ports:
-      - "50052:50052"
+    expose: # expose - это порт для payment, который используется для запуска payment
+      - "50052"
 
   order:
     build:
@@ -307,8 +308,8 @@ services:
       KAFKA_BROKERS: kafka:9092
     networks:
       - gobigtech-network
-    ports:
-      - "8080:8080"
+    expose: # expose - это порт для assembly, который используется для запуска assembly
+      - "8080"
 
   assembly:
     build:
@@ -358,8 +359,25 @@ services:
       ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
     networks:
       - gobigtech-network
+    expose: # expose - это порт для notification, который используется для запуска notification
+      - "8081"
+
+  # Envoy — единая точка входа (gateway), без IAM-check
+  envoy:
+    image: envoyproxy/envoy:v1.30-latest
+    container_name: envoy
+    restart: unless-stopped
     ports:
-      - "8081:8081"
+      - "8080:8080"
+    volumes:
+      - ./deploy/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./deploy/envoy/descriptor.pb:/etc/envoy/descriptor.pb:ro
+    command: ["-c", "/etc/envoy/envoy.yaml"]
+    networks:
+      - gobigtech-network
+    depends_on: # depends_on - это зависимость для envoy, которая зависит от order
+      order: # order - это сервис для order, который используется для запуска envoy
+        condition: service_started # service_started - это условие для запуска envoy
 
 volumes:
   order_pg_data:
