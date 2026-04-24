@@ -1,80 +1,68 @@
 # GoBigTech
+GoBigTech — учебный production-like проект микросервисной backend-системы на Go.
+Проект моделирует процесс оформления заказа: создание заказа, проверка наличия товара, оплата, сборка заказа, уведомления пользователя и проверка доступа через IAM.
 
-## Testing
+## Стек
+- Go
+- HTTP, gRPC, protobuf
+- PostgreSQL, MongoDB, Redis
+- Kafka KRaft
+- Docker, Docker Compose
+- Envoy Gateway
+- OpenAPI, gRPC-Gateway, buf, protoc-gen-validate
+- Zap, OpenTelemetry, Prometheus, Grafana, Jaeger
+- Testify, mockery, testcontainers-go
+- CI/CD: GitHub Actions
 
-```bash
+## Архитектура
+В проекте реализованы сервисы:
+- Order Service — создание и управление заказами
+- Inventory Service — проверка остатков
+- Payment Service — обработка оплаты
+- IAM Service — пользователи, сессии, авторизация
+- Assembly Service — асинхронная сборка заказа
+- Notification Service — уведомления пользователя
+  Сервисы взаимодействуют через HTTP/gRPC и Kafka.
+
+## Что реализовано
+- микросервисная архитектура
+- HTTP и gRPC API
+- кодогенерация из OpenAPI и protobuf
+- PostgreSQL и MongoDB репозитории
+- Redis-сессии с TTL
+- Kafka producer/consumer
+- DI-контейнер
+- unit, integration и e2e тесты
+- observability: logs, metrics, traces
+- Envoy как единая точка входа
+- Docker Compose для инфраструктуры
+
+## Быстрый запуск
+```
+make up
+```
+
+Тесты
+```
 make test
 make test-integration
 make test-e2e
 ```
+Kafka
 
-## Infrastructure
-
-### Kafka
-
-Kafka настроен в KRaft режиме (без ZooKeeper) для разработки и тестирования.
-
-**Быстрый старт:**
-```bash
-# Запустить Kafka
+Kafka работает в KRaft-режиме без ZooKeeper.
+```
 docker compose -f docker-compose.kafka.yml up -d
-
-# Проверить статус
-docker compose -f docker-compose.kafka.yml ps
-
-# Просмотр логов
-docker logs -f gobigtech-kafka
 ```
+Авторизация
 
-**Адреса подключения:**
-- Из Docker сети: `kafka:9092`
-- С хоста: `localhost:19092`
+Защищённые gRPC-методы требуют session_id в metadata:
 
-Подробная документация: [docs/kafka.md](docs/kafka.md)
+```-H "x-session-id: ${SESSION_ID}"```
 
-## Аутентификация через сессии
+Получить session_id можно через IAM Service: Register → Login.
 
-Все защищённые gRPC сервисы (например, Inventory) требуют передачи `session_id` в gRPC metadata.
+Цель проекта
 
-### Как получить session_id
+Цель проекта — не просто реализовать CRUD, а собрать backend-систему, приближенную к реальной production-разработке: с контрактами API, слоями, тестами, инфраструктурой, асинхронным взаимодействием, авторизацией и наблюдаемостью.
 
-1. Зарегистрировать пользователя через `IAM.Register`
-2. Выполнить вход через `IAM.Login` - в ответе будет `session_id`
-
-### Передача session_id в запросах
-
-Клиент обязан передавать `x-session-id` в gRPC metadata при каждом запросе к защищённым сервисам.
-
-**Пример с grpcurl:**
-```bash
-# Получить session_id
-SESSION_ID=$(grpcurl -plaintext \
-  -d '{"login":"user","password":"pass"}' \
-  127.0.0.1:50053 iam.v1.IAMService/Login | jq -r '.session_id')
-
-# Использовать session_id в запросе
-grpcurl -plaintext \
-  -H "x-session-id: ${SESSION_ID}" \
-  -d '{"product_id":"product-1"}' \
-  127.0.0.1:50051 inventory.v1.InventoryService/GetStock
-```
-
-### Обработка истёкших сессий
-
-Если TTL сессии истёк (сессия удалена из Redis), сервис вернёт ошибку:
-```
-rpc error: code = Unauthenticated desc = invalid or expired session
-```
-
-В этом случае клиент должен:
-1. Вызвать `IAM.Login` снова для получения нового `session_id`
-2. Повторить исходный запрос с новым `session_id`
-
-### Исключения
-
-Следующие методы не требуют аутентификации:
-- `/grpc.health.v1.Health/Check` - health check
-- `/grpc.health.v1.Health/Watch` - health watch
-- `/grpc.reflection.*` - gRPC reflection (для разработки)
-
-Подробная документация: [docs/IAM_SESSIONS.md](docs/IAM_SESSIONS.md)
